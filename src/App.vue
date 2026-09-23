@@ -13,6 +13,11 @@ const selectedConversation = ref<string | null>(null);
 // WebSocket 인스턴스
 let ws: WebSocket | null = null;
 
+// 재연결 관련 상태
+const connectionStatus = ref("연결되지 않음");
+const reconnectTimer = ref<NodeJS.Timeout | null>(null);
+const isManuallyDisconnected = ref(false);
+
 // 메시지 전송 함수
 const send = () => {
   if (inputMessage.value.trim() === "") return;
@@ -45,8 +50,12 @@ const getFilteredMessages = () => {
   }
 };
 
-// WebSocket 이벤트 핸들러
-const setupWebSocket = () => {
+// 재연결 시도 함수
+const attemptReconnect = () => {
+  if (isManuallyDisconnected.value) return;
+  
+  connectionStatus.value = "연결 중...";
+  
   // 기존 연결 종료
   if (ws) {
     ws.close();
@@ -61,6 +70,13 @@ const setupWebSocket = () => {
       ws.send(JSON.stringify({ type: "join", nickname: nickname.value }));
     }
     isConnected.value = true;
+    connectionStatus.value = "연결됨";
+    
+    // 재연결 성공 후 타이머 정리
+    if (reconnectTimer.value) {
+      clearTimeout(reconnectTimer.value);
+      reconnectTimer.value = null;
+    }
   };
   
   // 메시지 수신 처리
@@ -109,12 +125,47 @@ const setupWebSocket = () => {
   ws.onclose = () => {
     isConnected.value = false;
     console.log("Connection closed");
+    
+    // 수동으로 연결 해제한 경우 재연결하지 않음
+    if (isManuallyDisconnected.value) {
+      connectionStatus.value = "연결 끊김";
+      return;
+    }
+    
+    // 자동 재연결 로직
+    connectionStatus.value = "연결 끊김 - 3초 후 재연결 시도";
+    reconnectTimer.value = setTimeout(attemptReconnect, 3000);
   };
   
   // 오류 처리
   ws.onerror = (error) => {
     console.error("WebSocket Error:", error);
+    // 오류 발생 시에도 재연결 시도
+    if (reconnectTimer.value) {
+      clearTimeout(reconnectTimer.value);
+    }
+    connectionStatus.value = "연결 끊김 - 3초 후 재연결 시도";
+    reconnectTimer.value = setTimeout(attemptReconnect, 3000);
   };
+};
+
+// 수동 재연결 함수
+const manualReconnect = () => {
+  if (reconnectTimer.value) {
+    clearTimeout(reconnectTimer.value);
+    reconnectTimer.value = null;
+  }
+  isManuallyDisconnected.value = false;
+  attemptReconnect();
+};
+
+// 연결 해제 함수
+const disconnect = () => {
+  if (ws) {
+    ws.close();
+  }
+  isManuallyDisconnected.value = true;
+  connectionStatus.value = "연결 끊김";
 };
 
 // 컴포넌트 언마운트 시 WebSocket 종료
@@ -122,9 +173,18 @@ onUnmounted(() => {
   if (ws) {
     ws.close();
   }
+  if (reconnectTimer.value) {
+    clearTimeout(reconnectTimer.value);
+  }
 });
 
-// 전체 채팅방으로 전환
+// 컴포넌트 마운트 시 WebSocket 연결 설정
+onMounted(() => {
+  // 초기에는 닉네임이 없기 때문에 연결 시도하지 않음
+  // 닉네임이 입력되고 연결 버튼이 눌러질 때만 연결 시도
+});
+
+// 채팅방으로 전환
 const selectGlobalChat = () => {
   selectedConversation.value = null;
 };
@@ -137,19 +197,23 @@ const selectUserChat = (user: string) => {
 
 <template>
   <div class="chat-container">
+    <!-- 연결 상태 표시 -->
+    <div class="status">{{ connectionStatus }}</div>
+    
+    <!-- 재연결 버튼 -->
+    <div v-if="connectionStatus.includes('끊김')" style="margin-bottom: 10px;">
+      <button @click="manualReconnect" class="reconnect-button">재연결</button>
+    </div>
+    
     <!-- 상단: 닉네임 입력 -->
     <div class="input-section" v-if="!isConnected">
       <input
         v-model="nickname"
         placeholder="닉네임을 입력하세요"
-        @keyup.enter="setupWebSocket"
+        @keyup.enter="attemptReconnect"
       />
-      <button @click="setupWebSocket">접속</button>
-    </div>
-    
-    <!-- 연결 상태 표시 -->
-    <div class="status" v-if="isConnected">
-      <span style="color: green">연결됨</span>
+      <button @click="attemptReconnect" :disabled="isConnected || !nickname">연결</button>
+      <button @click="disconnect" :disabled="!isConnected">연결 해제</button>
     </div>
     
     <!-- 중단: 메시지 리스트 -->
@@ -236,6 +300,16 @@ const selectUserChat = (user: string) => {
 .status {
   margin-bottom: 20px;
   font-weight: bold;
+}
+
+.reconnect-button {
+  padding: 10px 20px;
+  font-size: 16px;
+  cursor: pointer;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
 }
 
 .messages {
