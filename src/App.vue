@@ -6,6 +6,8 @@ const isConnected = ref(false);
 const nickname = ref("");
 const messages = ref<Array<{ type: string; nickname: string; text: string }>>([]);
 const inputMessage = ref("");
+const userlist = ref<Array<string>>([]);
+const selectedUser = ref<string>("");
 
 // WebSocket 인스턴스
 let ws: WebSocket | null = null;
@@ -43,25 +45,27 @@ const setupWebSocket = () => {
     }
     isConnected.value = true;
   };
-
+  
   // 메시지 수신 처리
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
       if (data.type === "message") {
         messages.value.push(data);
+      } else if (data.type === "userlist") {
+        userlist.value = data.users;
       }
     } catch (e) {
       console.error("Invalid message format:", e);
     }
   };
-
+  
   // 연결 종료 처리
   ws.onclose = () => {
     isConnected.value = false;
     console.log("Connection closed");
   };
-
+  
   // 오류 처리
   ws.onerror = (error) => {
     console.error("WebSocket Error:", error);
@@ -87,12 +91,12 @@ onUnmounted(() => {
       />
       <button @click="setupWebSocket">접속</button>
     </div>
-
+    
     <!-- 연결 상태 표시 -->
     <div class="status" v-if="isConnected">
       <span style="color: green">연결됨</span>
     </div>
-
+    
     <!-- 중단: 메시지 리스트 -->
     <div class="messages">
       <div
@@ -106,7 +110,7 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
-
+    
     <!-- 하단: 메시지 입력 -->
     <div class="input-area" v-if="isConnected">
       <input
@@ -115,6 +119,22 @@ onUnmounted(() => {
         placeholder="메시지를 입력하세요"
       />
       <button @click="send" :disabled="!inputMessage">전송</button>
+    </div>
+  </div>
+  
+  <!-- 왼쪽 사이드바 -->
+  <div class="sidebar">
+    <div class="sidebar-header">접속자 목록</div>
+    <div class="user-list">
+      <div 
+        v-for="(user, index) in userlist" 
+        :key="index" 
+        class="user-item" 
+        :class="{ 'selected': user === selectedUser }" 
+        @click="selectedUser = user"
+      >
+        {{ user }}
+      </div>
     </div>
   </div>
 </template>
@@ -207,5 +227,44 @@ onUnmounted(() => {
 .input-area button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 200px;
+  height: 100vh;
+  background-color: #ccc;
+  padding: 20px;
+  overflow-y: auto;
+  box-sizing: border-box;
+  z-index: 1000;
+}
+
+.sidebar-header {
+  font-weight: bold;
+  margin-bottom: 15px;
+}
+
+.user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.user-item {
+  padding: 8px 12px;
+  background-color: #f0f0f0;
+  border-radius: 6px;
+  word-break: break-word;
+}
+
+.user-item.selected {
+  background-color: #d1e7dd !important;
+}
+
+.chat-container {
+  margin-left: 200px;
 }
 </style>
