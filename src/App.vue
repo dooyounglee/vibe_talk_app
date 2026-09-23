@@ -4,10 +4,11 @@ import { ref, onMounted, onUnmounted } from "vue";
 // WebSocket 연결 상태 추적
 const isConnected = ref(false);
 const nickname = ref("");
-const messages = ref<Array<{ type: string; nickname: string; text: string }>>([]);
+const globalMessages = ref<Array<{ type: string; nickname: string; text: string }>>([]);
+const dmMessages = ref<Record<string, Array<{ type: string; nickname: string; text: string }>>>({});
 const inputMessage = ref("");
 const userlist = ref<Array<string>>([]);
-const selectedUser = ref<string>("");
+const selectedConversation = ref<string | null>(null);
 
 // WebSocket 인스턴스
 let ws: WebSocket | null = null;
@@ -16,15 +17,31 @@ let ws: WebSocket | null = null;
 const send = () => {
   if (inputMessage.value.trim() === "") return;
   
-  const message = {
-    type: "message",
-    nickname: nickname.value,
-    text: inputMessage.value
-  };
+  const message = selectedConversation.value === null
+    ? {
+        type: "message",
+        nickname: nickname.value,
+        text: inputMessage.value
+      }
+    : {
+        type: "dm",
+        to: selectedConversation.value,
+        nickname: nickname.value,
+        text: inputMessage.value
+      };
   
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(message));
     inputMessage.value = "";
+  }
+};
+
+// 메시지 필터링 함수 - 현재 선택된 대화에 해당하는 메시지만 반환
+const getFilteredMessages = () => {
+  if (selectedConversation.value === null) {
+    return globalMessages.value;
+  } else {
+    return dmMessages.value[selectedConversation.value] || [];
   }
 };
 
@@ -51,9 +68,37 @@ const setupWebSocket = () => {
     try {
       const data = JSON.parse(event.data);
       if (data.type === "message") {
-        messages.value.push(data);
+        // 전체 채팅 메시지 저장
+        globalMessages.value.push(data);
+      } else if (data.type === "dm") {
+        // DM 메시지 처리
+        let conversationPartner = "";
+        
+        // 메시지의 발신자가 나 자신인 경우 to를 기준으로 저장
+        if (data.from === nickname.value) {
+          conversationPartner = data.to;
+        } else {
+          // 메시지의 발신자가 다른 사용자인 경우 from을 기준으로 저장
+          conversationPartner = data.from;
+        }
+        
+        // 메시지를 우리가 사용하는 구조로 변환 후 저장
+        const formattedMessage = {
+          type: "dm",
+          nickname: data.from,
+          text: data.text
+        };
+        
+        console.log("Formatted message:", formattedMessage);
+        console.log("Current nickname:", nickname.value);
+        
+        // DM 메시지를 해당 사용자에 맞게 저장
+        if (!dmMessages.value[conversationPartner]) {
+          dmMessages.value[conversationPartner] = [];
+        }
+        dmMessages.value[conversationPartner].push(formattedMessage);
       } else if (data.type === "userlist") {
-        userlist.value = data.users;
+        userlist.value = data.users.filter((user: string) => user !== nickname.value);
       }
     } catch (e) {
       console.error("Invalid message format:", e);
@@ -78,6 +123,16 @@ onUnmounted(() => {
     ws.close();
   }
 });
+
+// 전체 채팅방으로 전환
+const selectGlobalChat = () => {
+  selectedConversation.value = null;
+};
+
+// 특정 사용자와의 1:1 대화로 전환
+const selectUserChat = (user: string) => {
+  selectedConversation.value = user;
+};
 </script>
 
 <template>
@@ -100,12 +155,15 @@ onUnmounted(() => {
     <!-- 중단: 메시지 리스트 -->
     <div class="messages">
       <div
-        v-for="(msg, index) in messages"
+        v-for="(msg, index) in getFilteredMessages()"
         :key="index"
-        :class="{ 'message-self': msg.nickname === nickname.value, 'message-other': msg.nickname !== nickname.value }"
+        :class="{
+          'message-self': msg.nickname == nickname,
+          'message-other': msg.nickname !== nickname
+        }"
       >
         <div class="message-content">
-          <span class="nickname">[{{ msg.nickname }}]</span>
+          <span class="nickname" v-if="msg.nickname !== nickname">[{{ msg.nickname }}]</span>
           {{ msg.text }}
         </div>
       </div>
@@ -124,14 +182,23 @@ onUnmounted(() => {
   
   <!-- 왼쪽 사이드바 -->
   <div class="sidebar">
-    <div class="sidebar-header">접속자 목록</div>
+    <div class="sidebar-header">전체 채팅방</div>
+    <div 
+      class="user-item" 
+      :class="{ 'selected': selectedConversation === null }" 
+      @click="selectGlobalChat"
+    >
+      전체 채팅방
+    </div>
+    
+    <div class="sidebar-header" style="margin-top: 20px;">접속자 목록</div>
     <div class="user-list">
       <div 
         v-for="(user, index) in userlist" 
         :key="index" 
         class="user-item" 
-        :class="{ 'selected': user === selectedUser }" 
-        @click="selectedUser = user"
+        :class="{ 'selected': selectedConversation === user }" 
+        @click="selectUserChat(user)"
       >
         {{ user }}
       </div>
