@@ -6,7 +6,8 @@ const props = defineProps<{
   peer: string;
   myNickname: string;
   messages: ChatMessage[];
-  offset: number;
+  connectionStatus: string;
+  isConnected: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -46,16 +47,13 @@ watch(
 </script>
 
 <template>
-  <div
-    class="chat-overlay"
-    :style="{ paddingLeft: `${24 + offset * 28}px`, paddingTop: `${24 + offset * 28}px` }"
-    @click.self="$emit('close')"
-  >
+  <div class="chat-screen">
     <div class="chat-window">
       <div class="chat-header">
         <span class="peer">{{ peer }}님과의 1:1 채팅</span>
         <button class="close-btn" @click="$emit('close')">✕</button>
       </div>
+      <div v-if="!isConnected" class="conn-banner">{{ connectionStatus }}</div>
       <div ref="bodyRef" class="chat-body">
         <p v-if="messages.length === 0" class="empty">
           아직 대화가 없습니다. 첫 메시지를 보내보세요.
@@ -82,29 +80,24 @@ watch(
           placeholder="메시지를 입력하세요"
           @keyup.enter="send"
         />
-        <button :disabled="!draft.trim()" @click="send">전송</button>
+        <button :disabled="!draft.trim() || !isConnected" @click="send">전송</button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.chat-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+.chat-screen {
+  height: 100vh;
+  height: 100dvh;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 2000;
+  background: #f4f6f8;
 }
 .chat-window {
-  width: min(420px, calc(100vw - 32px));
-  height: min(560px, calc(100vh - 32px));
-  background: #fff;
-  border-radius: 12px;
+  flex: 1;
   display: flex;
   flex-direction: column;
+  background: #fff;
   overflow: hidden;
   font-family: sans-serif;
 }
@@ -123,6 +116,13 @@ watch(
   color: #fff;
   font-size: 16px;
   cursor: pointer;
+}
+.conn-banner {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #856404;
+  background: #fff3cd;
+  border-bottom: 1px solid #ffeeba;
 }
 .chat-body {
   flex: 1;
@@ -188,3 +188,4 @@ watch(
   cursor: not-allowed;
 }
 </style>
+
