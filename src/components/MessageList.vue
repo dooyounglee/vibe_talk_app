@@ -13,7 +13,7 @@ defineProps<{
       v-for="(msg, index) in messages"
       :key="index"
       :class="{
-        'message-self': msg.nickname == nickname,
+        'message-self': msg.nickname === nickname,
         'message-other': msg.nickname !== nickname
       }"
     >
@@ -28,7 +28,9 @@ defineProps<{
 <style scoped>
 .messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 10px;

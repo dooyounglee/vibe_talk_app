@@ -7,6 +7,7 @@ export function useChatSocket() {
   const nickname = ref("");
   const globalMessages = ref<Array<ChatMessage>>([]);
   const dmMessages = ref<Record<string, Array<ChatMessage>>>({});
+  const unreadCounts = ref<Record<string, number>>({});
   const inputMessage = ref("");
   const userlist = ref<Array<string>>([]);
   const selectedConversation = ref<string | null>(null);
@@ -18,6 +19,100 @@ export function useChatSocket() {
   const connectionStatus = ref("연결되지 않음");
   const reconnectTimer = ref<ReturnType<typeof setTimeout> | null>(null);
   const isManuallyDisconnected = ref(false);
+
+  const ensureDmBox = (peer: string): Array<ChatMessage> => {
+    if (!dmMessages.value[peer]) {
+      dmMessages.value[peer] = [];
+    }
+    return dmMessages.value[peer];
+  };
+
+  const pushDm = (peer: string, msg: ChatMessage, fromSelf: boolean) => {
+    ensureDmBox(peer).push(msg);
+    if (!fromSelf) {
+      unreadCounts.value[peer] = (unreadCounts.value[peer] ?? 0) + 1;
+    }
+  };
+
+  const clearUnread = (peer: string) => {
+    if (unreadCounts.value[peer]) {
+      unreadCounts.value[peer] = 0;
+    }
+  };
+
+  interface IncomingPayload {
+    type?: string;
+    nickname?: string;
+    from?: string;
+    to?: string;
+    text?: string;
+    users?: string[];
+  }
+
+  const handleIncoming = (raw: string) => {
+    const data: IncomingPayload = JSON.parse(raw) as IncomingPayload;
+    if (data.type === "message") {
+      const formatted: ChatMessage = {
+        type: "message",
+        nickname: String(data.nickname ?? ""),
+        text: String(data.text ?? ""),
+      };
+      globalMessages.value.push(formatted);
+    } else if (data.type === "dm") {
+      const from = String(data.from ?? data.nickname ?? "");
+      const to = String(data.to ?? "");
+      const fromSelf = from === nickname.value;
+      const peer = fromSelf ? to : from;
+      if (!peer) return;
+      const formattedMessage: ChatMessage = {
+        type: "dm",
+        nickname: from,
+        text: String(data.text ?? ""),
+      };
+      pushDm(peer, formattedMessage, fromSelf);
+    } else if (data.type === "userlist") {
+      const users: Array<string> = Array.isArray(data.users) ? data.users : [];
+      userlist.value = users.filter((user) => user !== nickname.value);
+    }
+  };
+
+  const attachHandlers = (socket: WebSocket) => {
+    socket.onmessage = (event: MessageEvent) => {
+      try {
+        handleIncoming(event.data as string);
+      } catch (e) {
+        console.error("Invalid message format:", e);
+      }
+    };
+    socket.onclose = () => {
+      isConnected.value = false;
+      if (isManuallyDisconnected.value) {
+        connectionStatus.value = "연결 끊김";
+        return;
+      }
+      connectionStatus.value = "연결 끊김 - 3초 후 재연결 시도";
+      reconnectTimer.value = setTimeout(attemptReconnect, 3000);
+    };
+    socket.onerror = (error) => {
+      console.error("WebSocket Error:", error);
+      if (reconnectTimer.value) {
+        clearTimeout(reconnectTimer.value);
+      }
+      connectionStatus.value = "연결 끊김 - 3초 후 재연결 시도";
+      reconnectTimer.value = setTimeout(attemptReconnect, 3000);
+    };
+  };
+
+  // 1:1 메시지 전송 (팝업 채팅창용)
+  const sendDm = (to: string, text: string): boolean => {
+    const trimmed = text.trim();
+    if (trimmed === "" || !to) return false;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(
+      JSON.stringify({ type: "dm", to, nickname: nickname.value, text: trimmed }),
+    );
+    return true;
+  };
 
   // 메시지 전송 함수
   const send = () => {
@@ -51,16 +146,21 @@ export function useChatSocket() {
 
     // 기존 연결 종료
     if (ws) {
-      ws.close();
+      try {
+        ws.close();
+      } catch {
+        // 무시
+      }
     }
 
     // 새 연결 생성
-    ws = new WebSocket("ws://localhost:8080");
+    const socket = new WebSocket("ws://localhost:8080");
+    ws = socket;
 
     // 연결 성공 시 처리
-    ws.onopen = () => {
+    socket.onopen = () => {
       if (nickname.value) {
-        ws!.send(JSON.stringify({ type: "join", nickname: nickname.value }));
+        socket.send(JSON.stringify({ type: "join", nickname: nickname.value }));
       }
       isConnected.value = true;
       connectionStatus.value = "연결됨";
@@ -72,74 +172,40 @@ export function useChatSocket() {
       }
     };
 
-    // 메시지 수신 처리
-    ws.onmessage = (event) => {
+    attachHandlers(socket);
+  };
+
+  // 첫 화면(닉네임 입력)에서 호출하는 연결 함수
+  const connect = (nicknameInput: string): boolean => {
+    const trimmed = nicknameInput.trim();
+    if (trimmed === "") return false;
+    nickname.value = trimmed;
+    isManuallyDisconnected.value = false;
+    if (reconnectTimer.value) {
+      clearTimeout(reconnectTimer.value);
+      reconnectTimer.value = null;
+    }
+    connectionStatus.value = "연결 중...";
+    if (ws) {
       try {
-        const data = JSON.parse(event.data);
-        if (data.type === "message") {
-          // 전체 채팅 메시지 저장
-          globalMessages.value.push(data);
-        } else if (data.type === "dm") {
-          // DM 메시지 처리
-          let conversationPartner = "";
-
-          // 메시지의 발신자가 나 자신인 경우 to를 기준으로 저장
-          if (data.from === nickname.value) {
-            conversationPartner = data.to;
-          } else {
-            // 메시지의 발신자가 다른 사용자인 경우 from을 기준으로 저장
-            conversationPartner = data.from;
-          }
-
-          // 메시지를 우리가 사용하는 구조로 변환 후 저장
-          const formattedMessage: ChatMessage = {
-            type: "dm",
-            nickname: data.from,
-            text: data.text,
-          };
-
-          console.log("Formatted message:", formattedMessage);
-          console.log("Current nickname:", nickname.value);
-
-          // DM 메시지를 해당 사용자에 맞게 저장
-          if (!dmMessages.value[conversationPartner]) {
-            dmMessages.value[conversationPartner] = [];
-          }
-          dmMessages.value[conversationPartner].push(formattedMessage);
-        } else if (data.type === "userlist") {
-          userlist.value = data.users.filter((user: string) => user !== nickname.value);
-        }
-      } catch (e) {
-        console.error("Invalid message format:", e);
+        ws.close();
+      } catch {
+        // 무시
       }
-    };
-
-    // 연결 종료 처리
-    ws.onclose = () => {
-      isConnected.value = false;
-      console.log("Connection closed");
-
-      // 수동으로 연결 해제한 경우 재연결하지 않음
-      if (isManuallyDisconnected.value) {
-        connectionStatus.value = "연결 끊김";
-        return;
-      }
-
-      // 자동 재연결 로직
-      connectionStatus.value = "연결 끊김 - 3초 후 재연결 시도";
-      reconnectTimer.value = setTimeout(attemptReconnect, 3000);
-    };
-
-    // 오류 처리
-    ws.onerror = (error) => {
-      console.error("WebSocket Error:", error);
-      // 오류 발생 시에도 재연결 시도
+    }
+    const socket = new WebSocket("ws://localhost:8080");
+    ws = socket;
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ type: "join", nickname: nickname.value }));
+      isConnected.value = true;
+      connectionStatus.value = "연결됨";
       if (reconnectTimer.value) {
         clearTimeout(reconnectTimer.value);
+        reconnectTimer.value = null;
       }
-      connectionStatus.value = "연결 끊김 - 3초 후 재연결 시도";
-      reconnectTimer.value = setTimeout(attemptReconnect, 3000);
     };
+    attachHandlers(socket);
+    return true;
   };
 
   // 수동 재연결 함수
@@ -154,10 +220,19 @@ export function useChatSocket() {
 
   // 연결 해제 함수
   const disconnect = () => {
-    if (ws) {
-      ws.close();
-    }
     isManuallyDisconnected.value = true;
+    if (reconnectTimer.value) {
+      clearTimeout(reconnectTimer.value);
+      reconnectTimer.value = null;
+    }
+    if (ws) {
+      try {
+        ws.close();
+      } catch {
+        // 무시
+      }
+    }
+    isConnected.value = false;
     connectionStatus.value = "연결 끊김";
   };
 
@@ -179,10 +254,14 @@ export function useChatSocket() {
     connectionStatus,
     globalMessages,
     dmMessages,
+    unreadCounts,
     userlist,
+    connect,
     attemptReconnect,
     manualReconnect,
     disconnect,
     send,
+    sendDm,
+    clearUnread,
   };
 }

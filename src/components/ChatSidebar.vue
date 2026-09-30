@@ -43,9 +43,11 @@ defineEmits<{
   top: 0;
   width: 200px;
   height: 100vh;
+  height: 100dvh;
   background-color: #ccc;
   padding: 20px;
   overflow-y: auto;
+  overflow-x: hidden;
   box-sizing: border-box;
   z-index: 1000;
 }
