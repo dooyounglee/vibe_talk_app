@@ -18,6 +18,17 @@ const inputMessage = ref("");
 const userlist = ref<Array<string>>([]);
 const selectedConversation = ref<string | null>(null);
 
+// 접속 직후 서버가 한 번만 보내주는 지난 대화 내역(history_group / history_dm)의
+// 중복 적용 방지 플래그. 새 접속(connect)마다 초기화되며, 같은 내역이 두 번
+// 수신되더라도 목록에 두 번 붙지 않도록 1회만 반영한다.
+let groupHistoryApplied = false;
+const dmHistoryApplied = new Set<string>();
+
+const resetHistoryGuards = () => {
+  groupHistoryApplied = false;
+  dmHistoryApplied.clear();
+};
+
 // WebSocket 인스턴스 (윈도우당 1개)
 let ws: WebSocket | null = null;
 
@@ -96,6 +107,11 @@ const clearUnread = (peer: string) => {
   }
 };
 
+interface HistoryEntry {
+  nickname?: string;
+  text?: string;
+}
+
 interface IncomingPayload {
   type?: string;
   nickname?: string;
@@ -103,6 +119,9 @@ interface IncomingPayload {
   to?: string;
   text?: string;
   users?: string[];
+  // 접속 직후 서버가 보내주는 지난 대화 내역 (history_group / history_dm)
+  withUser?: string;
+  messages?: Array<HistoryEntry>;
 }
 
 const handleIncoming = (raw: string) => {
@@ -129,6 +148,40 @@ const handleIncoming = (raw: string) => {
   } else if (data.type === "userlist") {
     const users: Array<string> = Array.isArray(data.users) ? data.users : [];
     userlist.value = users.filter((user) => user !== nickname.value);
+  } else if (data.type === "history_group") {
+    // 접속 직후 서버가 보내주는 전체 채팅 내역 (한 번만 수신)
+    // 같은 내역이 두 번 와도 앞에 두 번 붙지 않도록 1회만 처리한다.
+    if (groupHistoryApplied) return;
+    groupHistoryApplied = true;
+    const history: Array<ChatMessage> = (
+      Array.isArray(data.messages) ? data.messages : []
+    ).map((msg) => ({
+      type: "message",
+      nickname: String(msg?.nickname ?? ""),
+      text: String(msg?.text ?? ""),
+    }));
+    // 기존 내용 앞에 삽입 (과거 → 최신 순서 유지)
+    globalMessages.value.unshift(...history);
+    // 참고: 화면에 표시되는 목록(displayedMessages)은 globalMessages에서 그대로
+    // 파생되므로, 선택된 대화가 전체 채팅방(null)일 때의 표시도 함께 갱신된다.
+  } else if (data.type === "history_dm") {
+    const withUser = String(data.withUser ?? "");
+    if (!withUser) return;
+    // 같은 상대에 대한 history_dm은 한 번만 반영한다.
+    if (dmHistoryApplied.has(withUser)) return;
+    dmHistoryApplied.add(withUser);
+    const history: Array<ChatMessage> = (
+      Array.isArray(data.messages) ? data.messages : []
+    ).map((msg) => ({
+      type: "message",
+      nickname: String(msg?.nickname ?? withUser),
+      text: String(msg?.text ?? ""),
+    }));
+    // 해당 상대의 대화 박스를 만들고(없으면 생성) 맨 앞에 삽입
+    ensureDmBox(withUser).unshift(...history);
+    // 새로고침 복원용 로컬 저장소에도 반영
+    persistDmHistory();
+    // 참고: 선택된 대화가 withUser이면 표시 목록도 dmMessages에서 파생되므로 함께 갱신된다.
   }
 };
 
@@ -243,6 +296,8 @@ const connect = (nicknameInput: string): boolean => {
     unreadCounts.value = {};
     globalMessages.value = [];
   }
+  // 새 접속에서는 접속 직후 오는 히스토리를 다시 받는다.
+  resetHistoryGuards();
   isManuallyDisconnected.value = false;
   if (reconnectTimer.value) {
     clearTimeout(reconnectTimer.value);
@@ -311,6 +366,7 @@ const disconnect = () => {
   dmMessages.value = {};
   globalMessages.value = [];
   unreadCounts.value = {};
+  resetHistoryGuards();
 };
 
 /**
