@@ -6,6 +6,7 @@ import type { WebviewWindow as WebviewWindowInstance } from "@tauri-apps/api/web
 import NicknameView from "../components/NicknameView.vue";
 import UserListView from "../components/UserListView.vue";
 import RoomListView from "../components/RoomListView.vue";
+import CreateRoomModal from "../components/CreateRoomModal.vue";
 import { useChatSocket } from "../composables/useChatSocket";
 import {
   createChatBus,
@@ -29,6 +30,7 @@ const {
   dmMessages,
   unreadCounts,
   userlist,
+  onlineUsers,
   myRooms,
   roomMessages,
   roomUnread,
@@ -56,7 +58,7 @@ const isTauriChatWindow =
 
 // 화면 상태: false = 1번 화면(닉네임 입력), true = 2번 화면(방 목록 + 사용자 목록)
 const entered = ref(false);
-// 메인 화면 탭: 'rooms' = 내 채팅방, 'users' = 접속자(DM용)
+// 메인 화면 탭: 'rooms' = 내 채팅방, 'users' = 사용자(DM용, DB 등록 전체/탈퇴 제외)
 const mainTab = ref<"rooms" | "users">("rooms");
 // 상대별 1:1 채팅창 (웹: window.open 팝업 핸들 / Tauri: WebviewWindow)
 const chatWindows = ref(new Map<string, Window | null>());
@@ -547,6 +549,39 @@ watch(
   },
 );
 
+// 방 만들기 팝업(사용자 선택) 상태
+// - showCreateModal: 팝업 표시 여부
+// - createModalInitial: 팝업에 미리 체크해 둘 사용자 (사용자 우클릭/더보기 경유 시 1명)
+const showCreateModal = ref(false);
+const createModalInitial = ref<string[]>([]);
+// 방 생성 요청 직후 서버의 room_created/my_rooms 반영을 기다리는 동안,
+// 새로 생긴 방을 자동으로 열어주기 위한 대기 플래그
+const pendingAutoOpen = ref(false);
+
+const openCreateModal = (preselected: string[] = []) => {
+  createModalInitial.value = preselected;
+  showCreateModal.value = true;
+};
+
+const closeCreateModal = () => {
+  showCreateModal.value = false;
+  createModalInitial.value = [];
+};
+
+const handleConfirmCreateRoom = (payload: { name: string; members: string[] }) => {
+  const ok = createRoom(payload.name, payload.members);
+  if (ok) {
+    pendingAutoOpen.value = true;
+    closeCreateModal();
+    mainTab.value = "rooms";
+  }
+};
+
+// 사용자 목록에서 "방 만들기" 선택 시: 해당 사용자를 미리 체크한 팝업을 연다
+const handleCreateRoomWith = (user: string) => {
+  openCreateModal([user]);
+};
+
 // 새 DM이 오면 해당 상대의 새 창을 자동으로 띄운다
 // (이미 열려 있으면 포커스를 뺏지 않고 뱃지만 정리)
 watch(
@@ -558,6 +593,21 @@ watch(
         openChatWindow(peer, false);
       }
     }
+  },
+  { deep: true },
+);
+
+// 내가 만든 방이 목록에 반영되면 자동으로 새 창을 연다
+// (방 만들기 팝업에서 확인을 누른 직후 1회만 동작)
+watch(
+  myRooms,
+  (rooms) => {
+    if (!pendingAutoOpen.value) return;
+    if (rooms.length === 0) return;
+    // 가장 큰 방 번호 = 방금 생성된 방 (서버는 AUTOINCREMENT 발급)
+    const latest = rooms.reduce((a, b) => (a.roomId > b.roomId ? a : b));
+    pendingAutoOpen.value = false;
+    openRoomWindow(latest.roomId, true);
   },
   { deep: true },
 );
@@ -614,7 +664,7 @@ watch(
         내 채팅방 ({{ myRooms.length }})
       </button>
       <button :class="{ active: mainTab === 'users' }" @click="mainTab = 'users'">
-        접속자 ({{ userlist.length }})
+        사용자 ({{ userlist.length }})
       </button>
     </div>
     <RoomListView
@@ -624,7 +674,7 @@ watch(
       :unread="roomUnread"
       :is-connected="isConnected"
       @open-room="(id) => openRoomWindow(id, true)"
-      @create-room="(name) => createRoom(name)"
+      @request-create="() => openCreateModal()"
       @join-room="(id) => joinRoom(id)"
       @leave-room="(id) => leaveRoom(id)"
       @delete-room="confirmDeleteRoom"
@@ -634,12 +684,22 @@ watch(
       v-else
       :my-nickname="nickname"
       :users="userlist"
+      :online-users="onlineUsers"
       :unread-counts="unreadCounts"
       :connection-status="connectionStatus"
       :is-connected="isConnected"
       @open-chat="handleOpenChat"
+      @create-room-with="handleCreateRoomWith"
       @reconnect="manualReconnect"
       @disconnect="handleLeave"
+    />
+    <!-- 방 만들기 팝업: 사용자 1명 이상 체크 후 확인 -->
+    <CreateRoomModal
+      v-if="showCreateModal"
+      :users="userlist"
+      :initial-selected="createModalInitial"
+      @confirm="handleConfirmCreateRoom"
+      @cancel="closeCreateModal"
     />
   </div>
 

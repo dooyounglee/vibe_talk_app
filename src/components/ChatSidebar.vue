@@ -21,7 +21,7 @@ defineEmits<{
       전체 채팅방
     </div>
 
-    <div class="sidebar-header" style="margin-top: 20px;">접속자 목록</div>
+    <div class="sidebar-header" style="margin-top: 20px;">사용자 목록</div>
     <div class="user-list">
       <div
         v-for="(user, index) in userlist"

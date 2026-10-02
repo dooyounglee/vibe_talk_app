@@ -15,7 +15,10 @@ const isConnected = ref(false);
 const nickname = ref("");
 const dmMessages = ref<Record<string, Array<ChatMessage>>>({});
 const unreadCounts = ref<Record<string, number>>({});
+// userlist: DB 등록 사용자 전체 (탈퇴 제외, 본인 제외) — '사용자' 탭에 표시
 const userlist = ref<Array<string>>([]);
+// onlineUsers: 현재 접속중 닉네임 집합 (초록점/오프라인 구분용)
+const onlineUsers = ref<Array<string>>([]);
 
 // 번호방 상태 (내가 속한 방만)
 const myRooms = ref<Array<RoomInfo>>([]);
@@ -153,6 +156,7 @@ interface IncomingPayload {
   to?: string;
   text?: string;
   users?: string[];
+  onlineUsers?: string[];
   // 접속 직후 서버가 보내주는 지난 대화 내역 (history_dm / history_room)
   withUser?: string;
   messages?: Array<HistoryEntry>;
@@ -189,8 +193,14 @@ const handleIncoming = (raw: string) => {
     };
     pushDm(peer, formattedMessage, fromSelf);
   } else if (data.type === "userlist") {
+    // users = DB 등록 사용자 전체 (탈퇴 제외), onlineUsers = 현재 접속중
+    // 구버전 서버 호환: onlineUsers가 없으면 users를 그대로 접속중으로 간주
     const users: Array<string> = Array.isArray(data.users) ? data.users : [];
+    const online: Array<string> = Array.isArray(data.onlineUsers)
+      ? data.onlineUsers
+      : users;
     userlist.value = users.filter((user) => user !== nickname.value);
+    onlineUsers.value = online.filter((user) => user !== nickname.value);
   } else if (data.type === "system") {
     // 방 스코프 system 알림은 해당 방 박스에, 전역 알림은 무시(표시 위치 없음)
     const roomId = Number(data.roomId);
@@ -327,11 +337,23 @@ const sendDm = (to: string, text: string): boolean => {
 };
 
 // 번호방 액션 (메인 창의 단일 소켓으로 전송)
-const createRoomAction = (name: string): boolean => {
+const createRoomAction = (name: string, members: string[] = []): boolean => {
   const trimmed = name.trim();
   if (trimmed === "") return false;
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-  ws.send(JSON.stringify({ type: "room_create", name: trimmed.slice(0, 30) }));
+  const cleanMembers = Array.isArray(members)
+    ? members
+        .map((m) => String(m ?? "").trim())
+        .filter((m) => m && m !== nickname.value)
+        .slice(0, 50)
+    : [];
+  ws.send(
+    JSON.stringify({
+      type: "room_create",
+      name: trimmed.slice(0, 30),
+      members: cleanMembers,
+    }),
+  );
   return true;
 };
 
@@ -512,6 +534,7 @@ export function useChatSocket() {
     dmMessages,
     unreadCounts,
     userlist,
+    onlineUsers,
     myRooms,
     roomMessages,
     roomUnread,

@@ -11,27 +11,15 @@ defineProps<{
 
 defineEmits<{
   (e: "open-room", roomId: number): void;
-  (e: "create-room", name: string): void;
+  (e: "request-create"): void;
   (e: "join-room", roomId: number): void;
   (e: "leave-room", roomId: number): void;
   (e: "delete-room", roomId: number): void;
   (e: "refresh"): void;
 }>();
 
-const newRoomName = ref("");
 const joinRoomIdText = ref("");
 const error = ref("");
-
-const submitCreate = (emit: (e: "create-room", name: string) => void) => {
-  const name = newRoomName.value.trim();
-  if (!name) {
-    error.value = "방 이름을 입력하세요.";
-    return;
-  }
-  error.value = "";
-  emit("create-room", name);
-  newRoomName.value = "";
-};
 
 const submitJoin = (emit: (e: "join-room", roomId: number) => void) => {
   const id = Number(joinRoomIdText.value.trim());
@@ -49,8 +37,7 @@ const submitJoin = (emit: (e: "join-room", roomId: number) => void) => {
   <div class="room-screen">
     <div class="room-actions">
       <div class="action-row">
-        <input v-model="newRoomName" placeholder="새 방 이름 (예: 가족모임)" maxlength="30" @keyup.enter="submitCreate($emit)" />
-        <button class="primary" :disabled="!isConnected || !newRoomName.trim()" @click="submitCreate($emit)">방 만들기</button>
+        <button class="primary full" :disabled="!isConnected" @click="$emit('request-create')">방 만들기</button>
       </div>
       <div class="action-row">
         <input v-model="joinRoomIdText" placeholder="방 번호로 입장 (예: 3)" inputmode="numeric" @keyup.enter="submitJoin($emit)" />
@@ -88,6 +75,7 @@ const submitJoin = (emit: (e: "join-room", roomId: number) => void) => {
 .action-row input { flex: 1; padding: 8px 10px; font-size: 14px; border: 1px solid #ddd; border-radius: 8px; }
 .action-row button { padding: 8px 12px; font-size: 13px; border: 1px solid #ddd; border-radius: 8px; background: #fff; cursor: pointer; }
 .action-row button.primary { background: #007bff; border-color: #007bff; color: #fff; }
+.action-row button.full { flex: 1; padding: 10px 12px; font-size: 14px; }
 .action-row button.ghost { color: #555; }
 .action-row button:disabled { opacity: 0.5; cursor: not-allowed; }
 .error { color: #d33; font-size: 13px; margin: 0; }
