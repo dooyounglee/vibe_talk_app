@@ -5,12 +5,14 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { WebviewWindow as WebviewWindowInstance } from "@tauri-apps/api/webviewWindow";
 import NicknameView from "../components/NicknameView.vue";
 import UserListView from "../components/UserListView.vue";
+import RoomListView from "../components/RoomListView.vue";
 import { useChatSocket } from "../composables/useChatSocket";
 import {
   createChatBus,
   createChatBusHub,
   createTauriChatBus,
   currentChatPeerFromUrl,
+  currentRoomIdFromUrl,
   dedupeKeyFor,
   isTauriRuntime,
   type ChatBus,
@@ -19,7 +21,7 @@ import {
 import { NICKNAME_STORAGE_KEY } from "../constants";
 
 // 이 메인 창이 유일한 WebSocket 소유자.
-// 1:1 채팅창(별도 윈도우)은 소켓을 만들지 않고 이벤트 버스로 상태를 받아간다.
+// 채팅창(별도 윈도우)은 소켓을 만들지 않고 이벤트 버스로 상태를 받아간다.
 const {
   nickname,
   isConnected,
@@ -27,26 +29,44 @@ const {
   dmMessages,
   unreadCounts,
   userlist,
+  myRooms,
+  roomMessages,
+  roomUnread,
+  roomMembers,
   connect,
   manualReconnect,
   disconnect,
   sendDm,
   clearUnread,
+  clearRoomUnread,
+  createRoom,
+  joinRoom,
+  leaveRoom,
+  deleteRoom,
+  refreshRooms,
+  sendRoom,
 } = useChatSocket();
 
 const router = useRouter();
 
-// Tauri 채팅 윈도우(#/chat/...)에서는 메인 로직을 동작시키지 않는다.
+// Tauri 채팅 윈도우(#/chat/... 또는 #/room/...)에서는 메인 로직을 동작시키지 않는다.
 // (이 윈도우는 소켓을 만들지 않고 메인 윈도우의 스냅샷만 받아 표시한다)
-const isTauriChatWindow = currentChatPeerFromUrl() !== null;
+const isTauriChatWindow =
+  currentChatPeerFromUrl() !== null || currentRoomIdFromUrl() !== null;
 
-// 화면 상태: false = 1번 화면(닉네임 입력), true = 2번 화면(사용자 목록)
+// 화면 상태: false = 1번 화면(닉네임 입력), true = 2번 화면(방 목록 + 사용자 목록)
 const entered = ref(false);
+// 메인 화면 탭: 'rooms' = 내 채팅방, 'users' = 접속자(DM용)
+const mainTab = ref<"rooms" | "users">("rooms");
 // 상대별 1:1 채팅창 (웹: window.open 팝업 핸들 / Tauri: WebviewWindow)
 const chatWindows = ref(new Map<string, Window | null>());
 const tauriChatWindows = new Map<string, WebviewWindowInstance>();
+// 방별 채팅창 (웹: window.open 팝업 핸들 / Tauri: WebviewWindow)
+const roomWindows = ref(new Map<number, Window | null>());
+const tauriRoomWindows = new Map<number, WebviewWindowInstance>();
 // 이벤트로 상태를 받아가는 채팅창 목록 (스냅샷 브로드캐스트 대상)
 const openPeers = new Set<string>();
+const openRooms = new Set<number>();
 const seenBusMessages = new Set<string>();
 let bus: (ChatBus & { add: (bus: ChatBus | null) => void }) | null = null;
 let busClosed = false;
@@ -161,6 +181,109 @@ const openTauriChatWindowWith = async (
   clearUnread(peer);
 };
 
+// 번호방: 새 창 열기 (웹 팝업 / Tauri WebviewWindow)
+const roomWindowLabel = (roomId: number) => `room_${roomId}`;
+
+const openBrowserRoomWindow = (roomId: number, focusExisting: boolean) => {
+  const existing = roomWindows.value.get(roomId);
+  if (existing && !existing.closed) {
+    if (focusExisting) existing.focus();
+    clearRoomUnread(roomId);
+    return;
+  }
+  const url = `${window.location.origin}${window.location.pathname}#/room/${roomId}`;
+  const child = window.open(
+    url,
+    `vibe_talk_room_${roomId}`,
+    "width=420,height=640,menubar=no,toolbar=no,location=no,status=no,resizable=yes",
+  );
+  if (child) {
+    roomWindows.value.set(roomId, child);
+  } else if (focusExisting) {
+    routerPushRoom(roomId);
+  }
+  clearRoomUnread(roomId);
+};
+
+const routerPushRoom = (roomId: number) => {
+  try {
+    void router.push({ name: "room", params: { roomId: String(roomId) } });
+  } catch {
+    // 무시
+  }
+};
+
+const openTauriRoomWindowWith = async (
+  Ctor: typeof WebviewWindow,
+  roomId: number,
+  focusExisting: boolean,
+) => {
+  const label = roomWindowLabel(roomId);
+  const existing = await Ctor.getByLabel(label);
+  if (existing) {
+    await existing.show().catch(() => undefined);
+    if (focusExisting) await existing.setFocus().catch(() => undefined);
+    clearRoomUnread(roomId);
+    return;
+  }
+  const child = new Ctor(label, {
+    url: `#/room/${roomId}`,
+    title: `채팅방 #${roomId}`,
+    width: 420,
+    height: 640,
+    resizable: true,
+    visible: true,
+    focus: true,
+    center: true,
+  });
+  tauriRoomWindows.set(roomId, child);
+  await child.once("tauri://created", () => {
+    clearWindowError();
+    setTimeout(() => {
+      broadcastRoom(roomId);
+    }, 600);
+  });
+  await child.once("tauri://error", (e) => {
+    showWindowError(`채팅방 창 생성 실패: ${JSON.stringify(e)}`);
+  });
+  clearRoomUnread(roomId);
+};
+
+const openRoomWindow = (roomId: number, focusExisting = false) => {
+  if (!roomId) return;
+  clearWindowError();
+  if (!isTauriRuntime()) {
+    openBrowserRoomWindow(roomId, focusExisting);
+    return;
+  }
+  void openTauriRoomWindowWith(WebviewWindow, roomId, focusExisting).catch(
+    (e: unknown) => {
+      const detail = e instanceof Error ? e.message : String(e);
+      showWindowError(`채팅방 창 열기 실패: ${detail}`);
+      routerPushRoom(roomId);
+    },
+  );
+};
+
+const broadcastRoom = (roomId: number) => {
+  if (!bus) return;
+  const info = myRooms.value.find((r) => r.roomId === roomId);
+  bus.post({
+    kind: "room-state",
+    roomId,
+    roomName: info?.name ?? "",
+    myNickname: nickname.value,
+    messages: [...(roomMessages.value[roomId] ?? [])],
+    members: [...(roomMembers.value[roomId] ?? [])],
+    connectionStatus: connectionStatus.value,
+    isConnected: isConnected.value,
+  });
+};
+
+const broadcastAllRooms = () => {
+  openRooms.forEach((roomId) => broadcastRoom(roomId));
+};
+
 // 더블클릭 시 새 윈도우 창으로 1:1 채팅방을 연다.
 // 이미 열려 있으면 새로 열지 않고, 명시적 더블클릭일 때만 포커스를 준다.
 const openChatWindow = (peer: string, focusExisting = false) => {
@@ -215,6 +338,12 @@ const handleNicknameSubmit = (value: string) => {
   }
 };
 
+const confirmDeleteRoom = (id: number) => {
+  if (window.confirm(`방 #${id}를 삭제할까요? (DB에는 남습니다)`)) {
+    deleteRoom(id);
+  }
+};
+
 const closeAllChatWindows = () => {
   chatWindows.value.forEach((child) => {
     try {
@@ -224,6 +353,14 @@ const closeAllChatWindows = () => {
     }
   });
   chatWindows.value.clear();
+  roomWindows.value.forEach((child) => {
+    try {
+      child?.close();
+    } catch {
+      // 무시
+    }
+  });
+  roomWindows.value.clear();
   tauriChatWindows.forEach((child) => {
     try {
       void child.close().catch(() => undefined);
@@ -232,7 +369,16 @@ const closeAllChatWindows = () => {
     }
   });
   tauriChatWindows.clear();
+  tauriRoomWindows.forEach((child) => {
+    try {
+      void child.close().catch(() => undefined);
+    } catch {
+      // 무시
+    }
+  });
+  tauriRoomWindows.clear();
   openPeers.clear();
+  openRooms.clear();
   // Tauri 채팅 윈도우는 라벨로 직접 찾아 닫는다 (핸들 누락 대비)
   if (isTauriRuntime()) {
     void (async () => {
@@ -274,8 +420,6 @@ const handleMainUnload = () => {
 onMounted(() => {
   // Tauri 채팅 윈도우에서는 메인 로직(소켓/버스/자동입장)을 동작시키지 않는다
   if (isTauriChatWindow) return;
-  // 채팅창 → 메인 방향 이벤트 수신 (유일한 소켓 소유자로서 처리)
-  // Tauri에서는 tauri event 버스, 웹에서는 BroadcastChannel 버스를 사용한다.
   const handleBusMessage: ChatBusHandler = (msg) => {
     switch (msg.kind) {
       case "chat-open":
@@ -288,6 +432,7 @@ onMounted(() => {
         break;
       case "chat-read":
         clearUnread(msg.peer);
+        broadcastPeer(msg.peer);
         break;
       case "chat-send": {
         // BroadcastChannel + tauri event 양쪽으로 같은 메시지가 올 수 있어 id로 중복 제거
@@ -302,6 +447,32 @@ onMounted(() => {
         }
         sendDm(msg.peer, msg.text);
         broadcastPeer(msg.peer);
+        break;
+      }
+      case "room-open":
+        openRooms.add(msg.roomId);
+        clearRoomUnread(msg.roomId);
+        broadcastRoom(msg.roomId);
+        break;
+      case "room-close":
+        openRooms.delete(msg.roomId);
+        break;
+      case "room-read":
+        clearRoomUnread(msg.roomId);
+        broadcastRoom(msg.roomId);
+        break;
+      case "room-send": {
+        const key = dedupeKeyFor(msg);
+        if (key) {
+          if (seenBusMessages.has(key)) break;
+          seenBusMessages.add(key);
+          if (seenBusMessages.size > 200) {
+            const oldest = seenBusMessages.values().next().value as string | undefined;
+            if (oldest) seenBusMessages.delete(oldest);
+          }
+        }
+        sendRoom(msg.roomId, msg.text);
+        broadcastRoom(msg.roomId);
         break;
       }
       default:
@@ -364,10 +535,17 @@ onUnmounted(() => {
   bus = null;
 });
 
-// DM/연결 상태가 바뀌면 열려 있는 채팅창들에 스냅샷 브로드캐스트
-watch([dmMessages, connectionStatus, isConnected, nickname], broadcastAll, {
-  deep: true,
-});
+// 방/DM/연결 상태가 바뀌면 열려 있는 채팅창들에 스냅샷 브로드캐스트
+watch(
+  [dmMessages, roomMessages, roomMembers, connectionStatus, isConnected, nickname, myRooms],
+  () => {
+    broadcastAll();
+    broadcastAllRooms();
+  },
+  {
+    deep: true,
+  },
+);
 
 // 새 DM이 오면 해당 상대의 새 창을 자동으로 띄운다
 // (이미 열려 있으면 포커스를 뺏지 않고 뱃지만 정리)
@@ -383,6 +561,23 @@ watch(
   },
   { deep: true },
 );
+
+// 새 방 메시지가 오면 해당 방 창을 자동으로 띄운다
+// (이미 열려 있으면 포커스를 뺏지 않고 뱃지만 정리)
+watch(
+  roomUnread,
+  (counts) => {
+    for (const key of Object.keys(counts)) {
+      const roomId = Number(key);
+      const count = (counts as Record<string, number>)[key] ?? 0;
+      if (count > 0) {
+        openRoomWindow(roomId, false);
+      }
+    }
+  },
+  { deep: true },
+);
+
 </script>
 
 <template>
@@ -394,18 +589,59 @@ watch(
     @submit="handleNicknameSubmit"
   />
 
-  <!-- 2번 화면: 사용자 목록 (3번 화면인 1:1 채팅은 별도 윈도우 창으로 열림) -->
-  <UserListView
-    v-else
-    :my-nickname="nickname"
-    :users="userlist"
-    :unread-counts="unreadCounts"
-    :connection-status="connectionStatus"
-    :is-connected="isConnected"
-    @open-chat="handleOpenChat"
-    @reconnect="manualReconnect"
-    @disconnect="handleLeave"
-  />
+  <!-- 2번 화면: 내 채팅방 + 사용자 목록 (채팅은 별도 윈도우 창으로 열림) -->
+  <div v-else class="main-screen">
+    <div class="main-header">
+      <div>
+        <div class="me">내 닉네임: <strong>{{ nickname }}</strong></div>
+        <div class="status">{{ connectionStatus }}</div>
+      </div>
+      <div class="header-buttons">
+        <button
+          v-if="connectionStatus.includes('끊김')"
+          class="small-btn primary"
+          @click="manualReconnect"
+        >
+          재연결
+        </button>
+        <button v-if="isConnected" class="small-btn" @click="handleLeave">
+          나가기
+        </button>
+      </div>
+    </div>
+    <div class="tab-row">
+      <button :class="{ active: mainTab === 'rooms' }" @click="mainTab = 'rooms'">
+        내 채팅방 ({{ myRooms.length }})
+      </button>
+      <button :class="{ active: mainTab === 'users' }" @click="mainTab = 'users'">
+        접속자 ({{ userlist.length }})
+      </button>
+    </div>
+    <RoomListView
+      v-if="mainTab === 'rooms'"
+      :my-nickname="nickname"
+      :rooms="myRooms"
+      :unread="roomUnread"
+      :is-connected="isConnected"
+      @open-room="(id) => openRoomWindow(id, true)"
+      @create-room="(name) => createRoom(name)"
+      @join-room="(id) => joinRoom(id)"
+      @leave-room="(id) => leaveRoom(id)"
+      @delete-room="confirmDeleteRoom"
+      @refresh="() => refreshRooms()"
+    />
+    <UserListView
+      v-else
+      :my-nickname="nickname"
+      :users="userlist"
+      :unread-counts="unreadCounts"
+      :connection-status="connectionStatus"
+      :is-connected="isConnected"
+      @open-chat="handleOpenChat"
+      @reconnect="manualReconnect"
+      @disconnect="handleLeave"
+    />
+  </div>
 
   <!-- 새 창 열기 실패 시 원인 표시 (Tauri 권한 문제 등) -->
   <div v-if="windowError" class="window-error" @click="clearWindowError">
@@ -414,6 +650,42 @@ watch(
 </template>
 
 <style scoped>
+.main-screen {
+  height: 100vh;
+  height: 100dvh;
+  padding: 20px;
+  font-family: sans-serif;
+  background: #f4f6f8;
+  box-sizing: border-box;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.main-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #fff;
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+.me { font-size: 15px; }
+.status { font-size: 12px; color: #666; margin-top: 4px; }
+.header-buttons { display: flex; gap: 8px; }
+.small-btn {
+  padding: 6px 12px; font-size: 13px;
+  border: 1px solid #ddd; border-radius: 6px;
+  background: #fff; cursor: pointer;
+}
+.small-btn.primary { background: #007bff; color: #fff; border-color: #007bff; }
+.tab-row { display: flex; gap: 8px; }
+.tab-row button {
+  flex: 1; padding: 10px; font-size: 14px;
+  border: 1px solid #ddd; border-radius: 10px;
+  background: #fff; cursor: pointer;
+}
+.tab-row button.active { background: #007bff; border-color: #007bff; color: #fff; font-weight: bold; }
 .window-error {
   position: fixed;
   left: 50%;

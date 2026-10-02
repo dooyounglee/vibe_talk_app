@@ -21,14 +21,30 @@ export interface ChatStatePayload {
   isConnected: boolean;
 }
 
+export interface RoomStatePayload {
+  roomId: number;
+  roomName: string;
+  myNickname: string;
+  messages: ChatMessage[];
+  members: string[];
+  connectionStatus: string;
+  isConnected: boolean;
+}
+
 export type ChatBusMessage =
-  // 채팅창 → 메인
+  // 1:1 채팅창 → 메인
   | { kind: "chat-open"; peer: string }
   | { kind: "chat-close"; peer: string }
   | { kind: "chat-read"; peer: string }
   | { kind: "chat-send"; peer: string; text: string; id: string }
+  // 번호방 채팅창 → 메인
+  | { kind: "room-open"; roomId: number }
+  | { kind: "room-close"; roomId: number }
+  | { kind: "room-read"; roomId: number }
+  | { kind: "room-send"; roomId: number; text: string; id: string }
   // 메인 → 채팅창
   | ({ kind: "chat-state" } & ChatStatePayload)
+  | ({ kind: "room-state" } & RoomStatePayload)
   | { kind: "main-ready" }
   | { kind: "main-closing" };
 
@@ -82,6 +98,7 @@ export function createChatBusHub(): ChatBus & { add: (bus: ChatBus | null) => vo
 
 export function dedupeKeyFor(msg: ChatBusMessage): string | null {
   if (msg.kind === "chat-send") return `send:${msg.id}`;
+  if (msg.kind === "room-send") return `room-send:${msg.id}`;
   return null;
 }
 
@@ -155,6 +172,24 @@ export function createTauriChatBus(
     };
   };
   return openBus();
+}
+
+// 방 번호로 여는 단체 채팅방. 새 창으로 열리면 소켓 없이 버스로만 동작한다.
+function currentChatRoomIdFromUrl(): number | null {
+  try {
+    const hash = window.location.hash;
+    const match = hash.match(/^#\/room\/(\d+)/);
+    if (!match) return null;
+    const id = Number(match[1]);
+    return Number.isInteger(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 현재 라우트가 번호방(#/room/3)인지. Tauri 채팅 윈도우 판별용 */
+export function currentRoomIdFromUrl(): number | null {
+  return currentChatRoomIdFromUrl();
 }
 
 /** 현재 라우트가 1:1 채팅방(#/chat/...)인지 */

@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-router";
 import HomeView from "../views/HomeView.vue";
 import ChatRoomView from "../views/ChatRoomView.vue";
+import RoomView from "../views/RoomView.vue";
 
 // hash 히스토리 사용: Tauri 빌드(file://)와 vite dev 서버 모두에서 동작
 const routes: RouteRecordRaw[] = [
@@ -14,6 +15,12 @@ const routes: RouteRecordRaw[] = [
     path: "/chat/:peer",
     name: "chat",
     component: ChatRoomView,
+  },
+  {
+    // 번호방 단체 채팅 페이지. window.open()으로 새 창에 띄우는 대상
+    path: "/room/:roomId",
+    name: "room",
+    component: RoomView,
   },
 ];
 

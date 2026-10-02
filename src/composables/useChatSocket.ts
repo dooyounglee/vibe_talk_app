@@ -1,32 +1,37 @@
 import { ref } from "vue";
-import type { ChatMessage } from "../types/chat";
+import type { ChatMessage, RoomInfo } from "../types/chat";
 import {
   DM_HISTORY_STORAGE_KEY,
   MAX_DM_HISTORY_PER_PEER,
+  MAX_ROOM_HISTORY_PER_ROOM,
+  ROOM_HISTORY_STORAGE_KEY,
 } from "../constants";
 
 // ─── 모듈 싱글톤 상태 ───
 // 같은 윈도우(JS 컨텍스트) 안에서는 하나의 WebSocket만 유지한다.
 // 실제 소켓 연결은 메인 창(HomeView)에서만 만들고,
-// 새 창으로 열리는 1:1 채팅방(ChatRoomView)은 BroadcastChannel 이벤트 버스로 주고받는다.
+// 새 창으로 열리는 채팅방(ChatRoomView/RoomView)은 이벤트 버스로 주고받는다.
 const isConnected = ref(false);
 const nickname = ref("");
-const globalMessages = ref<Array<ChatMessage>>([]);
 const dmMessages = ref<Record<string, Array<ChatMessage>>>({});
 const unreadCounts = ref<Record<string, number>>({});
-const inputMessage = ref("");
 const userlist = ref<Array<string>>([]);
-const selectedConversation = ref<string | null>(null);
 
-// 접속 직후 서버가 한 번만 보내주는 지난 대화 내역(history_group / history_dm)의
+// 번호방 상태 (내가 속한 방만)
+const myRooms = ref<Array<RoomInfo>>([]);
+const roomMessages = ref<Record<number, Array<ChatMessage>>>({});
+const roomUnread = ref<Record<number, number>>({});
+const roomMembers = ref<Record<number, Array<string>>>({});
+
+// 접속 직후 서버가 한 번만 보내주는 지난 대화 내역(history_dm / history_room)의
 // 중복 적용 방지 플래그. 새 접속(connect)마다 초기화되며, 같은 내역이 두 번
 // 수신되더라도 목록에 두 번 붙지 않도록 1회만 반영한다.
-let groupHistoryApplied = false;
 const dmHistoryApplied = new Set<string>();
+const roomHistoryApplied = new Set<number>();
 
 const resetHistoryGuards = () => {
-  groupHistoryApplied = false;
   dmHistoryApplied.clear();
+  roomHistoryApplied.clear();
 };
 
 // WebSocket 인스턴스 (윈도우당 1개)
@@ -107,9 +112,38 @@ const clearUnread = (peer: string) => {
   }
 };
 
+const clearRoomUnread = (roomId: number) => {
+  if (roomUnread.value[roomId]) {
+    roomUnread.value[roomId] = 0;
+  }
+};
+
+const ensureRoomBox = (roomId: number): Array<ChatMessage> => {
+  if (!roomMessages.value[roomId]) {
+    roomMessages.value[roomId] = [];
+  }
+  return roomMessages.value[roomId];
+};
+
+const persistRoomHistory = () => {
+  try {
+    const boxes: Record<number, Array<ChatMessage>> = {};
+    for (const [roomId, list] of Object.entries(roomMessages.value)) {
+      boxes[Number(roomId)] = list.slice(-MAX_ROOM_HISTORY_PER_ROOM);
+    }
+    localStorage.setItem(
+      ROOM_HISTORY_STORAGE_KEY,
+      JSON.stringify({ nickname: nickname.value, boxes }),
+    );
+  } catch {
+    // 무시 (용량 초과 등)
+  }
+};
+
 interface HistoryEntry {
   nickname?: string;
   text?: string;
+  timestamp?: number;
 }
 
 interface IncomingPayload {
@@ -119,21 +153,30 @@ interface IncomingPayload {
   to?: string;
   text?: string;
   users?: string[];
-  // 접속 직후 서버가 보내주는 지난 대화 내역 (history_group / history_dm)
+  // 접속 직후 서버가 보내주는 지난 대화 내역 (history_dm / history_room)
   withUser?: string;
   messages?: Array<HistoryEntry>;
+  // 번호방
+  rooms?: Array<RoomInfo>;
+  roomId?: number;
+  members?: Array<string>;
+  reason?: string;
+  timestamp?: number;
 }
+
+const pruneRooms = () => {
+  const alive = new Set(myRooms.value.map((r) => r.roomId));
+  for (const key of Object.keys(roomMessages.value)) {
+    if (!alive.has(Number(key))) delete roomMessages.value[Number(key)];
+  }
+  for (const key of Object.keys(roomUnread.value)) {
+    if (!alive.has(Number(key))) delete roomUnread.value[Number(key)];
+  }
+};
 
 const handleIncoming = (raw: string) => {
   const data: IncomingPayload = JSON.parse(raw) as IncomingPayload;
-  if (data.type === "message") {
-    const formatted: ChatMessage = {
-      type: "message",
-      nickname: String(data.nickname ?? ""),
-      text: String(data.text ?? ""),
-    };
-    globalMessages.value.push(formatted);
-  } else if (data.type === "dm") {
+  if (data.type === "dm") {
     const from = String(data.from ?? data.nickname ?? "");
     const to = String(data.to ?? "");
     const fromSelf = from === nickname.value;
@@ -148,22 +191,19 @@ const handleIncoming = (raw: string) => {
   } else if (data.type === "userlist") {
     const users: Array<string> = Array.isArray(data.users) ? data.users : [];
     userlist.value = users.filter((user) => user !== nickname.value);
-  } else if (data.type === "history_group") {
-    // 접속 직후 서버가 보내주는 전체 채팅 내역 (한 번만 수신)
-    // 같은 내역이 두 번 와도 앞에 두 번 붙지 않도록 1회만 처리한다.
-    if (groupHistoryApplied) return;
-    groupHistoryApplied = true;
-    const history: Array<ChatMessage> = (
-      Array.isArray(data.messages) ? data.messages : []
-    ).map((msg) => ({
-      type: "message",
-      nickname: String(msg?.nickname ?? ""),
-      text: String(msg?.text ?? ""),
-    }));
-    // 기존 내용 앞에 삽입 (과거 → 최신 순서 유지)
-    globalMessages.value.unshift(...history);
-    // 참고: 화면에 표시되는 목록(displayedMessages)은 globalMessages에서 그대로
-    // 파생되므로, 선택된 대화가 전체 채팅방(null)일 때의 표시도 함께 갱신된다.
+  } else if (data.type === "system") {
+    // 방 스코프 system 알림은 해당 방 박스에, 전역 알림은 무시(표시 위치 없음)
+    const roomId = Number(data.roomId);
+    if (Number.isInteger(roomId) && roomId > 0) {
+      ensureRoomBox(roomId).push({
+        type: "system",
+        nickname: "",
+        text: String(data.text ?? ""),
+        timestamp: Date.now(),
+        roomId,
+      });
+      persistRoomHistory();
+    }
   } else if (data.type === "history_dm") {
     const withUser = String(data.withUser ?? "");
     if (!withUser) return;
@@ -176,12 +216,75 @@ const handleIncoming = (raw: string) => {
       type: "message",
       nickname: String(msg?.nickname ?? withUser),
       text: String(msg?.text ?? ""),
+      timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
     }));
     // 해당 상대의 대화 박스를 만들고(없으면 생성) 맨 앞에 삽입
     ensureDmBox(withUser).unshift(...history);
     // 새로고침 복원용 로컬 저장소에도 반영
     persistDmHistory();
-    // 참고: 선택된 대화가 withUser이면 표시 목록도 dmMessages에서 파생되므로 함께 갱신된다.
+  } else if (data.type === "my_rooms" || data.type === "room_created") {
+    const rooms = Array.isArray(data.rooms) ? data.rooms : [];
+    myRooms.value = rooms
+      .filter((r) => r && typeof r.roomId === "number")
+      .map((r) => ({
+        roomId: Number(r.roomId),
+        name: String(r.name ?? ""),
+        owner: String(r.owner ?? ""),
+        memberCount: Number(r.memberCount ?? 0),
+      }));
+    pruneRooms();
+    persistRoomHistory();
+  } else if (data.type === "history_room") {
+    const roomId = Number(data.roomId);
+    if (!Number.isInteger(roomId)) return;
+    if (roomHistoryApplied.has(roomId)) return;
+    roomHistoryApplied.add(roomId);
+    const history: Array<ChatMessage> = (
+      Array.isArray(data.messages) ? data.messages : []
+    ).map((msg) => ({
+      type: "room",
+      nickname: String(msg?.nickname ?? ""),
+      text: String(msg?.text ?? ""),
+      timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
+      roomId,
+    }));
+    ensureRoomBox(roomId).unshift(...history);
+    persistRoomHistory();
+  } else if (data.type === "room_message") {
+    const roomId = Number(data.roomId);
+    if (!Number.isInteger(roomId)) return;
+    const from = String(data.from ?? data.nickname ?? "");
+    const isSelf = from === nickname.value;
+    const msg: ChatMessage = {
+      type: "room",
+      nickname: from,
+      text: String(data.text ?? ""),
+      timestamp: typeof data.timestamp === "number" ? data.timestamp : Date.now(),
+      roomId,
+    };
+    ensureRoomBox(roomId).push(msg);
+    persistRoomHistory();
+    if (!isSelf) {
+      roomUnread.value[roomId] = (roomUnread.value[roomId] ?? 0) + 1;
+    }
+  } else if (data.type === "room_members") {
+    const roomId = Number(data.roomId);
+    if (!Number.isInteger(roomId)) return;
+    roomMembers.value[roomId] = Array.isArray(data.members)
+      ? data.members.map((m) => String(m))
+      : [];
+  } else if (data.type === "room_closed") {
+    const roomId = Number(data.roomId);
+    if (!Number.isInteger(roomId)) return;
+    myRooms.value = myRooms.value.filter((r) => r.roomId !== roomId);
+    delete roomMessages.value[roomId];
+    delete roomUnread.value[roomId];
+    delete roomMembers.value[roomId];
+    persistRoomHistory();
+  } else if (data.type === "room_join_failed") {
+    // 실패 사유는 화면에서 system 메시지로 노출한다 (HomeView에서 처리)
+    const roomId = Number(data.roomId);
+    void roomId;
   }
 };
 
@@ -223,28 +326,49 @@ const sendDm = (to: string, text: string): boolean => {
   return true;
 };
 
-// 메시지 전송 함수
-const send = () => {
-  if (inputMessage.value.trim() === "") return;
+// 번호방 액션 (메인 창의 단일 소켓으로 전송)
+const createRoomAction = (name: string): boolean => {
+  const trimmed = name.trim();
+  if (trimmed === "") return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_create", name: trimmed.slice(0, 30) }));
+  return true;
+};
 
-  const message =
-    selectedConversation.value === null
-      ? {
-          type: "message",
-          nickname: nickname.value,
-          text: inputMessage.value,
-        }
-      : {
-          type: "dm",
-          to: selectedConversation.value,
-          nickname: nickname.value,
-          text: inputMessage.value,
-        };
+const joinRoom = (roomId: number): boolean => {
+  if (!Number.isInteger(roomId)) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  roomHistoryApplied.delete(roomId);
+  ws.send(JSON.stringify({ type: "room_join", roomId }));
+  return true;
+};
 
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(message));
-    inputMessage.value = "";
-  }
+const leaveRoom = (roomId: number): boolean => {
+  if (!Number.isInteger(roomId)) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_leave", roomId }));
+  return true;
+};
+
+const deleteRoom = (roomId: number): boolean => {
+  if (!Number.isInteger(roomId)) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_delete", roomId }));
+  return true;
+};
+
+const refreshRooms = (): boolean => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_list" }));
+  return true;
+};
+
+const sendRoom = (roomId: number, text: string): boolean => {
+  const trimmed = text.trim();
+  if (trimmed === "" || !Number.isInteger(roomId)) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_message", roomId, text: trimmed }));
+  return true;
 };
 
 // 재연결 시도 함수
@@ -291,10 +415,12 @@ const connect = (nicknameInput: string): boolean => {
   const nicknameChanged = nickname.value !== "" && nickname.value !== trimmed;
   nickname.value = trimmed;
   if (nicknameChanged) {
-    // 다른 닉네임으로 입장하면 이전 세션의 대화/뱃지를 섞지 않는다
     dmMessages.value = {};
     unreadCounts.value = {};
-    globalMessages.value = [];
+    myRooms.value = [];
+    roomMessages.value = {};
+    roomUnread.value = {};
+    roomMembers.value = {};
   }
   // 새 접속에서는 접속 직후 오는 히스토리를 다시 받는다.
   resetHistoryGuards();
@@ -360,12 +486,16 @@ const disconnect = () => {
   // 명시적 나가기이므로 로컬 히스토리도 함께 정리
   try {
     localStorage.removeItem(DM_HISTORY_STORAGE_KEY);
+    localStorage.removeItem(ROOM_HISTORY_STORAGE_KEY);
   } catch {
     // 무시
   }
   dmMessages.value = {};
-  globalMessages.value = [];
   unreadCounts.value = {};
+  myRooms.value = [];
+  roomMessages.value = {};
+  roomUnread.value = {};
+  roomMembers.value = {};
   resetHistoryGuards();
 };
 
@@ -377,20 +507,27 @@ const disconnect = () => {
 export function useChatSocket() {
   return {
     nickname,
-    inputMessage,
-    selectedConversation,
     isConnected,
     connectionStatus,
-    globalMessages,
     dmMessages,
     unreadCounts,
     userlist,
+    myRooms,
+    roomMessages,
+    roomUnread,
+    roomMembers,
     connect,
     attemptReconnect,
     manualReconnect,
     disconnect,
-    send,
     sendDm,
     clearUnread,
+    clearRoomUnread,
+    createRoom: createRoomAction,
+    joinRoom,
+    leaveRoom,
+    deleteRoom,
+    refreshRooms,
+    sendRoom,
   };
 }
