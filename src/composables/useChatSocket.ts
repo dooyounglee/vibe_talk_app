@@ -19,6 +19,17 @@ const unreadCounts = ref<Record<string, number>>({});
 const userlist = ref<Array<string>>([]);
 // onlineUsers: 현재 접속중 닉네임 집합 (초록점/오프라인 구분용)
 const onlineUsers = ref<Array<string>>([]);
+// usersDetail: admin 전용 전체 사용자(탈퇴 포함) — '사용자'탭 관리용
+export interface UserDetail {
+  nickname: string;
+  isDeleted: boolean;
+}
+const usersDetail = ref<Array<UserDetail>>([]);
+// join 실패 메시지 (미등록/탈퇴 시 NicknameView에 표시)
+const joinError = ref("");
+// user_upsert 결과 메시지 (UserListView 모달에 표시)
+const userUpsertResult = ref("");
+const isAdmin = () => nickname.value === "admin";
 
 // 번호방 상태 (내가 속한 방만)
 const myRooms = ref<Array<RoomInfo>>([]);
@@ -157,6 +168,10 @@ interface IncomingPayload {
   text?: string;
   users?: string[];
   onlineUsers?: string[];
+  usersDetail?: Array<{ nickname?: string; isDeleted?: boolean; is_deleted?: number }>;
+  isDeleted?: boolean;
+  is_deleted?: number;
+  ok?: boolean;
   // 접속 직후 서버가 보내주는 지난 대화 내역 (history_dm / history_room)
   withUser?: string;
   messages?: Array<HistoryEntry>;
@@ -201,6 +216,33 @@ const handleIncoming = (raw: string) => {
       : users;
     userlist.value = users.filter((user) => user !== nickname.value);
     onlineUsers.value = online.filter((user) => user !== nickname.value);
+  } else if (data.type === "userlist_detail") {
+    // admin 전용: 탈퇴 포함 전체 사용자 상세 (본인 제외)
+    const detail = Array.isArray(data.usersDetail) ? data.usersDetail : [];
+    usersDetail.value = detail
+      .filter((d) => !!d && typeof d.nickname === "string")
+      .map((d) => ({
+        nickname: String(d.nickname),
+        isDeleted: d.isDeleted === true || d.is_deleted === 1,
+      }))
+      .filter((d) => d.nickname !== nickname.value);
+  } else if (data.type === "join_failed") {
+    // 미등록/탈퇴 사용자 입장 거부 — 닉네임 화면에 사유 표시
+    joinError.value = String(data.text || "입장할 수 없습니다");
+    connectionStatus.value = "입장 거부됨";
+    try {
+      ws?.close();
+    } catch {
+      // 무시
+    }
+    ws = null;
+    isConnected.value = false;
+  } else if (data.type === "user_upsert_result") {
+    if (data.ok) {
+      userUpsertResult.value = "";
+    } else {
+      userUpsertResult.value = String(data.text || "사용자 저장에 실패했습니다");
+    }
   } else if (data.type === "system") {
     // 방 스코프 system 알림은 해당 방 박스에, 전역 알림은 무시(표시 위치 없음)
     const roomId = Number(data.roomId);
@@ -434,6 +476,7 @@ const attemptReconnect = () => {
 const connect = (nicknameInput: string): boolean => {
   const trimmed = nicknameInput.trim();
   if (trimmed === "") return false;
+  joinError.value = "";
   const nicknameChanged = nickname.value !== "" && nickname.value !== trimmed;
   nickname.value = trimmed;
   if (nicknameChanged) {
@@ -473,6 +516,19 @@ const connect = (nicknameInput: string): boolean => {
     }
   };
   attachHandlers(socket);
+  return true;
+};
+
+// ─── 사용자 관리: 추가/수정 (admin 전용) ───
+// 닉네임 + 탈퇴여부를 서버로 전송 (서버에서 upsert + 목록 재브로드캐스트)
+const upsertUser = (targetNickname: string, isDeleted: boolean): boolean => {
+  if (nickname.value !== "admin") return false;
+  const trimmed = targetNickname.trim().slice(0, 20);
+  if (!trimmed || !ws || ws.readyState !== WebSocket.OPEN) return false;
+  userUpsertResult.value = "";
+  ws.send(
+    JSON.stringify({ type: "user_upsert", nickname: trimmed, isDeleted })
+  );
   return true;
 };
 
@@ -535,6 +591,10 @@ export function useChatSocket() {
     unreadCounts,
     userlist,
     onlineUsers,
+    usersDetail,
+    joinError,
+    userUpsertResult,
+    isAdmin,
     myRooms,
     roomMessages,
     roomUnread,
@@ -552,5 +612,6 @@ export function useChatSocket() {
     deleteRoom,
     refreshRooms,
     sendRoom,
+    upsertUser,
   };
 }

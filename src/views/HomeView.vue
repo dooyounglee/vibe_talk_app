@@ -31,6 +31,10 @@ const {
   unreadCounts,
   userlist,
   onlineUsers,
+  usersDetail,
+  joinError,
+  userUpsertResult,
+  isAdmin,
   myRooms,
   roomMessages,
   roomUnread,
@@ -47,6 +51,7 @@ const {
   deleteRoom,
   refreshRooms,
   sendRoom,
+  upsertUser,
 } = useChatSocket();
 
 const router = useRouter();
@@ -340,6 +345,11 @@ const handleNicknameSubmit = (value: string) => {
   }
 };
 
+// join 거부(join_failed) 시: 메인 화면으로 넘어가지 않고 닉네임 화면에 머물며 사유 표시
+watch(joinError, (msg) => {
+  if (msg) entered.value = false;
+});
+
 const confirmDeleteRoom = (id: number) => {
   if (window.confirm(`방 #${id}를 삭제할까요? (DB에는 남습니다)`)) {
     deleteRoom(id);
@@ -582,6 +592,11 @@ const handleCreateRoomWith = (user: string) => {
   openCreateModal([user]);
 };
 
+// ─── 사용자 관리: 추가/수정 (admin 전용) ───
+const handleUpsertUser = (payload: { nickname: string; isDeleted: boolean }) => {
+  upsertUser(payload.nickname, payload.isDeleted);
+};
+
 // 새 DM이 오면 해당 상대의 새 창을 자동으로 띄운다
 // (이미 열려 있으면 포커스를 뺏지 않고 뱃지만 정리)
 watch(
@@ -636,6 +651,7 @@ watch(
     v-if="!entered"
     :connection-status="connectionStatus"
     :is-connected="isConnected"
+    :join-error="joinError"
     @submit="handleNicknameSubmit"
   />
 
@@ -688,10 +704,14 @@ watch(
       :unread-counts="unreadCounts"
       :connection-status="connectionStatus"
       :is-connected="isConnected"
+      :is-admin="isAdmin()"
+      :users-detail="usersDetail"
+      :upsert-result="userUpsertResult"
       @open-chat="handleOpenChat"
       @create-room-with="handleCreateRoomWith"
       @reconnect="manualReconnect"
       @disconnect="handleLeave"
+      @upsert-user="handleUpsertUser"
     />
     <!-- 방 만들기 팝업: 사용자 1명 이상 체크 후 확인 -->
     <CreateRoomModal

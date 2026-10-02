@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 
-defineProps<{
+const props = defineProps<{
   connectionStatus: string;
   isConnected: boolean;
+  joinError: string;
 }>();
 
 const emit = defineEmits<{
@@ -12,6 +13,13 @@ const emit = defineEmits<{
 
 const nicknameInput = ref("");
 const error = ref("");
+
+watch(
+  () => props.joinError,
+  (msg) => {
+    if (msg) error.value = msg;
+  }
+);
 
 const submit = () => {
   const trimmed = nicknameInput.value.trim();
