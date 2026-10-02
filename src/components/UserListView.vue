@@ -106,25 +106,6 @@ const confirmUserModal = () => {
 
 <template>
   <div class="userlist-screen" @click="closeMenu">
-    <div class="userlist-header">
-      <div>
-        <div class="me">내 닉네임: <strong>{{ myNickname }}</strong></div>
-        <div class="status">{{ connectionStatus }}</div>
-      </div>
-      <div class="header-buttons">
-        <button
-          v-if="connectionStatus.includes('끊김')"
-          class="small-btn primary"
-          @click="$emit('reconnect')"
-        >
-          재연결
-        </button>
-        <button v-if="isConnected" class="small-btn" @click="$emit('disconnect')">
-          나가기
-        </button>
-      </div>
-    </div>
-
     <h2 class="list-title">사용자 목록 ({{ displayUsers.length }}명)
       <button v-if="isAdmin" class="small-btn primary add-btn" @click="openAddModal">추가</button>
     </h2>
@@ -138,7 +119,7 @@ const confirmUserModal = () => {
         :class="{ withdrawn: u.isDeleted }"
         @dblclick="$emit('open-chat', u.nickname)"
         @contextmenu="(e) => onContextMenu(e, u.nickname)"
-        :title="'더블클릭: ' + u.nickname + '님과 1:1 채팅 / 우클릭: 메뉴'"
+        :title="u.nickname + '님과 1:1 채팅 / 우클릭: 메뉴'"
       >
         <span class="avatar">{{ u.nickname.slice(0, 1) }}</span>
         <span class="name">{{ u.nickname }}</span>
@@ -162,7 +143,6 @@ const confirmUserModal = () => {
           title="더보기"
           @click="(e) => onMoreClick(e, u.nickname)"
         >⋮</button>
-        <span class="hint">더블클릭 → 1:1 채팅</span>
       </li>
     </ul>
 
@@ -208,34 +188,9 @@ const confirmUserModal = () => {
 
 <style scoped>
 .userlist-screen {
-  height: 100vh;
-  height: 100dvh;
-  padding: 20px;
-  font-family: sans-serif;
-  background: #f4f6f8;
-  box-sizing: border-box;
-  overflow-y: auto;
-}
-.userlist-header {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: #fff;
-  border-radius: 10px;
-  padding: 12px 16px;
-  margin-bottom: 16px;
-}
-.me {
-  font-size: 15px;
-}
-.status {
-  font-size: 12px;
-  color: #666;
-  margin-top: 4px;
-}
-.header-buttons {
-  display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 12px;
 }
 .small-btn {
   padding: 6px 12px;
@@ -320,10 +275,6 @@ const confirmUserModal = () => {
 }
 .presence.online { background: #28a745; }
 .presence.offline { background: #ccc; }
-.hint {
-  font-size: 11px;
-  color: #999;
-}
 .more-btn {
   border: 1px solid #ddd;
   background: #fff;

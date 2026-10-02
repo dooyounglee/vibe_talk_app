@@ -18,37 +18,32 @@ defineEmits<{
   (e: "refresh"): void;
 }>();
 
-const joinRoomIdText = ref("");
-const error = ref("");
+// '내 채팅방 (n개)' 우측 더보기 메뉴 상태
+const showMenu = ref(false);
 
-const submitJoin = (emit: (e: "join-room", roomId: number) => void) => {
-  const id = Number(joinRoomIdText.value.trim());
-  if (!Number.isInteger(id) || id <= 0) {
-    error.value = "방 번호를 숫자로 입력하세요. (예: 3)";
-    return;
-  }
-  error.value = "";
-  emit("join-room", id);
-  joinRoomIdText.value = "";
+const toggleMenu = (e: MouseEvent) => {
+  e.stopPropagation();
+  showMenu.value = !showMenu.value;
+};
+
+const closeMenu = () => {
+  showMenu.value = false;
 };
 </script>
 
 <template>
-  <div class="room-screen">
-    <div class="room-actions">
-      <div class="action-row">
-        <button class="primary full" :disabled="!isConnected" @click="$emit('request-create')">방 만들기</button>
+  <div class="room-screen" @click="closeMenu">
+    <div class="list-header-row">
+      <h2 class="list-title">내 채팅방 ({{ rooms.length }}개)</h2>
+      <div class="more-wrap">
+        <button class="more-btn" title="더보기" :disabled="!isConnected" @click="toggleMenu">⋮</button>
+        <div v-if="showMenu" class="ctx-menu" @click.stop>
+          <button :disabled="!isConnected" @click="$emit('request-create'); closeMenu();">방 만들기</button>
+        </div>
       </div>
-      <div class="action-row">
-        <input v-model="joinRoomIdText" placeholder="방 번호로 입장 (예: 3)" inputmode="numeric" @keyup.enter="submitJoin($emit)" />
-        <button :disabled="!isConnected || !joinRoomIdText.trim()" @click="submitJoin($emit)">입장</button>
-        <button class="ghost" :disabled="!isConnected" @click="$emit('refresh')">새로고침</button>
-      </div>
-      <p v-if="error" class="error">{{ error }}</p>
     </div>
 
-    <h2 class="list-title">내 채팅방 ({{ rooms.length }}개)</h2>
-    <p v-if="rooms.length === 0" class="empty">속한 방이 없습니다. 방을 만들거나 번호로 입장하세요.</p>
+    <p v-if="rooms.length === 0" class="empty">속한 방이 없습니다. 방을 만드세요.</p>
     <ul class="room-list">
       <li v-for="room in rooms" :key="room.roomId" class="room-item" @dblclick="$emit('open-room', room.roomId)">
         <span class="room-id">#{{ room.roomId }}</span>
@@ -70,16 +65,27 @@ const submitJoin = (emit: (e: "join-room", roomId: number) => void) => {
 
 <style scoped>
 .room-screen { display: flex; flex-direction: column; gap: 12px; }
-.room-actions { background: #fff; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-.action-row { display: flex; gap: 8px; }
-.action-row input { flex: 1; padding: 8px 10px; font-size: 14px; border: 1px solid #ddd; border-radius: 8px; }
-.action-row button { padding: 8px 12px; font-size: 13px; border: 1px solid #ddd; border-radius: 8px; background: #fff; cursor: pointer; }
-.action-row button.primary { background: #007bff; border-color: #007bff; color: #fff; }
-.action-row button.full { flex: 1; padding: 10px 12px; font-size: 14px; }
-.action-row button.ghost { color: #555; }
-.action-row button:disabled { opacity: 0.5; cursor: not-allowed; }
-.error { color: #d33; font-size: 13px; margin: 0; }
+.list-header-row { display: flex; align-items: center; justify-content: space-between; }
 .list-title { font-size: 16px; margin: 4px 0 0; }
+.more-wrap { position: relative; }
+.more-btn {
+  border: 1px solid #ddd; background: #fff; border-radius: 6px;
+  width: 28px; height: 28px; cursor: pointer; font-size: 16px; line-height: 1; color: #555;
+}
+.more-btn:hover { background: #f0f0f0; }
+.more-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.ctx-menu {
+  position: absolute; right: 0; top: 32px;
+  display: flex; flex-direction: column; min-width: 140px;
+  background: #fff; border: 1px solid #ddd; border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15); z-index: 1000; overflow: hidden;
+}
+.ctx-menu button {
+  padding: 10px 14px; font-size: 14px; border: none;
+  background: #fff; cursor: pointer; text-align: left;
+}
+.ctx-menu button:hover { background: #f2f7ff; }
+.ctx-menu button:disabled { opacity: 0.5; cursor: not-allowed; }
 .empty { color: #888; font-size: 14px; margin: 0; }
 .room-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .room-item { display: flex; align-items: center; gap: 10px; background: #fff; border-radius: 10px; padding: 10px 12px; cursor: pointer; user-select: none; }
