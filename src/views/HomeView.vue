@@ -50,7 +50,6 @@ const {
   createRoom,
   joinRoom,
   leaveRoom,
-  deleteRoom,
   refreshRooms,
   sendRoom,
   upsertUser,
@@ -382,12 +381,6 @@ const handleNicknameSubmit = (value: string) => {
 watch(joinError, (msg) => {
   if (msg) entered.value = false;
 });
-
-const confirmDeleteRoom = (id: number) => {
-  if (window.confirm(`방 #${id}를 삭제할까요? (DB에는 남습니다)`)) {
-    deleteRoom(id);
-  }
-};
 
 const closeAllChatWindows = () => {
   chatWindows.value.forEach((child) => {
@@ -729,15 +722,14 @@ watch(
     </div>
     <RoomListView
       v-if="mainTab === 'rooms'"
-      :my-nickname="nickname"
       :rooms="myRooms"
       :unread="roomUnread"
       :is-connected="isConnected"
+      :my-nickname="nickname"
       @open-room="(id) => openRoomWindow(id, true)"
       @request-create="() => openCreateModal()"
       @join-room="(id) => joinRoom(id)"
       @leave-room="(id) => leaveRoom(id)"
-      @delete-room="confirmDeleteRoom"
       @refresh="() => refreshRooms()"
     />
     <UserListView

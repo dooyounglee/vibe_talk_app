@@ -205,6 +205,13 @@ const handleIncoming = (raw: string) => {
             ? r.displayName
             : (r.name ?? ""),
         ),
+        // 목록 미리보기용 마지막 메시지 요약 (구버전 서버엔 필드가 없어 undefined → 미표시)
+        lastMessage:
+          typeof r.lastMessage === "string" ? r.lastMessage : null,
+        lastMessageAt:
+          typeof r.lastMessageAt === "number" ? r.lastMessageAt : null,
+        lastMessageSender:
+          typeof r.lastMessageSender === "string" ? r.lastMessageSender : null,
       }));
     pruneRooms();
   } else if (data.type === "history_room") {
@@ -238,6 +245,23 @@ const handleIncoming = (raw: string) => {
     if (!isSelf) {
       roomUnread.value[roomId] = (roomUnread.value[roomId] ?? 0) + 1;
     }
+    // '내 채팅방' 목록 미리보기/시간 즉시 갱신 (다음 my_rooms 수신 때 DB 값으로 재확정)
+    const room = myRooms.value.find((r) => r.roomId === roomId);
+    if (room) {
+      room.lastMessage = msg.text;
+      room.lastMessageAt = msg.timestamp ?? null;
+      room.lastMessageSender = from;
+    }
+  } else if (data.type === "room_last_message") {
+    // 방에 메시지가 저장될 때마다 서버가 멤버에게 보내는 목록 갱신 신호
+    const roomId = Number(data.roomId);
+    if (!Number.isInteger(roomId)) return;
+    const room = myRooms.value.find((r) => r.roomId === roomId);
+    if (!room) return;
+    room.lastMessage = String(data.text ?? "");
+    room.lastMessageAt =
+      typeof data.timestamp === "number" ? data.timestamp : Date.now();
+    room.lastMessageSender = String(data.from ?? data.nickname ?? "");
   } else if (data.type === "room_members") {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
