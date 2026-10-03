@@ -11,9 +11,14 @@ import { currentChatPeerFromUrl, isTauriRuntime } from "../chatBus";
 const route = useRoute();
 const router = useRouter();
 
-const peer = computed(
-  () => String(route.params.peer ?? "") || currentChatPeerFromUrl() || "",
-);
+const peer = computed(() => {
+  const raw = String(route.params.peer ?? "");
+  // vue-router가 ?mainId=... 를 param에 붙이는 경우 분리
+  // (#/chat/A?mainId=xxx → peer "A?mainId=xxx" 방지)
+  const q = raw.indexOf("?");
+  const base = q >= 0 ? raw.slice(0, q) : raw;
+  return base || currentChatPeerFromUrl() || "";
+});
 const {
   messages,
   myNickname,

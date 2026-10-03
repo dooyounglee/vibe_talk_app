@@ -11,7 +11,10 @@ const router = useRouter();
 
 const roomId = computed(() => {
   const raw = route.params.roomId;
-  const n = Number(Array.isArray(raw) ? raw[0] : raw);
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  // ?mainId=... 가 param에 붙는 경우 분리
+  const base = String(first ?? "").split("?")[0];
+  const n = Number(base);
   if (Number.isInteger(n) && n > 0) return n;
   return currentRoomIdFromUrl() ?? 0;
 });

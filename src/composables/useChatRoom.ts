@@ -4,6 +4,7 @@ import {
   createChatBus,
   createChatBusHub,
   createTauriChatBus,
+  currentMainIdFromUrl,
   currentRoomIdFromUrl,
   isTauriRuntime,
   type ChatBus,
@@ -17,6 +18,7 @@ const LINK_TIMEOUT_MS = 3500;
 
 export function useChatRoom(roomId: { readonly value: number }) {
   const store = useChatSocket();
+  const myMainId = currentMainIdFromUrl();
   const direct = computed(() => store.nickname.value.trim() !== "");
   const effectiveRoomId = computed(() => {
     if (Number.isInteger(roomId.value) && roomId.value > 0) return roomId.value;
@@ -61,17 +63,18 @@ export function useChatRoom(roomId: { readonly value: number }) {
     if (!target) return;
     if (direct.value) store.clearRoomUnread(target);
     try {
-      bus?.post({ kind: "room-open", roomId: target });
+      bus?.post({ kind: "room-open", roomId: target, mainId: myMainId ?? undefined });
     } catch { /* 무시 */ }
   };
   const announceClose = () => {
     const target = effectiveRoomId.value;
     if (!target || direct.value) return;
     try {
-      bus?.post({ kind: "room-close", roomId: target });
+      bus?.post({ kind: "room-close", roomId: target, mainId: myMainId ?? undefined });
     } catch { /* 무시 */ }
   };
   const handleBusMessage: ChatBusHandler = (msg) => {
+    if ("mainId" in msg && msg.mainId !== undefined && myMainId !== null && msg.mainId !== myMainId) return;
     if (msg.kind === "room-state") {
       if (msg.roomId !== effectiveRoomId.value) return;
       applyState(
@@ -96,7 +99,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
     if (direct.value) return store.sendRoom(target, trimmed);
     if (!linked.value || !busIsConnected.value) return false;
     try {
-      bus?.post({ kind: "room-send", roomId: target, text: trimmed, id: genSendId() });
+      bus?.post({ kind: "room-send", roomId: target, text: trimmed, id: genSendId(), mainId: myMainId ?? undefined });
     } catch {
       return false;
     }
@@ -204,7 +207,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
           store.clearRoomUnread(effectiveRoomId.value);
         } else if (linked.value) {
           try {
-            bus?.post({ kind: "room-read", roomId: effectiveRoomId.value });
+            bus?.post({ kind: "room-read", roomId: effectiveRoomId.value, mainId: myMainId ?? undefined });
           } catch {
             // 무시
           }

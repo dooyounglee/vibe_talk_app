@@ -19,7 +19,7 @@ import {
   type ChatBus,
   type ChatBusHandler,
 } from "../chatBus";
-import { NICKNAME_STORAGE_KEY } from "../constants";
+import { MAIN_ID_STORAGE_KEY, NICKNAME_STORAGE_KEY } from "../constants";
 
 // 이 메인 창이 유일한 WebSocket 소유자.
 // 채팅창(별도 윈도우)은 소켓을 만들지 않고 이벤트 버스로 상태를 받아간다.
@@ -56,6 +56,21 @@ const {
 
 const router = useRouter();
 
+// 탭별 메인 창 ID (A탭/B탭 팝업 버스 섞임 방지용).
+// sessionStorage라 탭마다 격리된다. 팝업 URL에 ?mainId= 로 심어 전달한다.
+const getMainId = (): string => {
+  try {
+    let v = sessionStorage.getItem(MAIN_ID_STORAGE_KEY);
+    if (!v) {
+      v = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      sessionStorage.setItem(MAIN_ID_STORAGE_KEY, v);
+    }
+    return v;
+  } catch {
+    return "main";
+  }
+};
+const mainId = getMainId();
 // Tauri 채팅 윈도우(#/chat/... 또는 #/room/...)에서는 메인 로직을 동작시키지 않는다.
 // (이 윈도우는 소켓을 만들지 않고 메인 윈도우의 스냅샷만 받아 표시한다)
 const isTauriChatWindow =
@@ -108,7 +123,8 @@ const openBrowserChatWindow = (peer: string, focusExisting: boolean) => {
   }
   // 더블클릭 제스처 안에서 동기로 열어야 팝업 차단을 피할 수 있다.
   // Tauri dev의 http://localhost:1420 에서도 동일 origin 팝업으로 동작한다.
-  const url = `${window.location.origin}${window.location.pathname}#/chat/${encodeURIComponent(peer)}`;
+  // ?mainId= 로 어느 메인 탭의 팝업인지 표시 (A/B 탭 버스 섞임 방지)
+  const url = `${window.location.origin}${window.location.pathname}#/chat/${encodeURIComponent(peer)}?mainId=${encodeURIComponent(mainId)}`;
   const child = window.open(
     url,
     `vibe_talk_chat_${chatWindowLabel(peer)}`,
@@ -159,7 +175,7 @@ const openTauriChatWindowWith = async (
   // dev(http://localhost:1420)와 build(file://../dist) 모두에서 동작하도록
   // 현재 페이지 기준 상대 경로 + 해시 라우트를 사용한다.
   const child = new Ctor(label, {
-    url: `#/chat/${encodeURIComponent(peer)}`,
+    url: `#/chat/${encodeURIComponent(peer)}?mainId=${encodeURIComponent(mainId)}`,
     title: `${peer}님과의 1:1 채팅`,
     width: 420,
     height: 640,
@@ -198,7 +214,7 @@ const openBrowserRoomWindow = (roomId: number, focusExisting: boolean) => {
     clearRoomUnread(roomId);
     return;
   }
-  const url = `${window.location.origin}${window.location.pathname}#/room/${roomId}`;
+  const url = `${window.location.origin}${window.location.pathname}#/room/${roomId}?mainId=${encodeURIComponent(mainId)}`;
   const child = window.open(
     url,
     `vibe_talk_room_${roomId}`,
@@ -234,7 +250,7 @@ const openTauriRoomWindowWith = async (
     return;
   }
   const child = new Ctor(label, {
-    url: `#/room/${roomId}`,
+    url: `#/room/${roomId}?mainId=${encodeURIComponent(mainId)}`,
     title: (() => {
       const info = myRooms.value.find((r) => r.roomId === roomId);
       const disp = info?.displayName?.trim() ? info.displayName : info?.name;
@@ -288,6 +304,7 @@ const broadcastRoom = (roomId: number) => {
     members: [...(roomMembers.value[roomId] ?? [])],
     connectionStatus: connectionStatus.value,
     isConnected: isConnected.value,
+    mainId,
   });
 };
 
@@ -329,6 +346,7 @@ const broadcastPeer = (peer: string) => {
     messages: [...(dmMessages.value[peer] ?? [])],
     connectionStatus: connectionStatus.value,
     isConnected: isConnected.value,
+    mainId,
   });
 };
 
@@ -427,7 +445,7 @@ const handleLeave = () => {
 
 const handleMainUnload = () => {
   try {
-    bus?.post({ kind: "main-closing" });
+    bus?.post({ kind: "main-closing", mainId });
   } catch {
     // 무시
   }
@@ -437,6 +455,8 @@ onMounted(() => {
   // Tauri 채팅 윈도우에서는 메인 로직(소켓/버스/자동입장)을 동작시키지 않는다
   if (isTauriChatWindow) return;
   const handleBusMessage: ChatBusHandler = (msg) => {
+    // 다른 탭(다른 mainId)의 팝업 메시지는 무시 (A탭/B탭 버스 섞임 방지)
+    if ("mainId" in msg && msg.mainId !== undefined && msg.mainId !== mainId) return;
     switch (msg.kind) {
       case "chat-open":
         openPeers.add(msg.peer);
@@ -512,13 +532,13 @@ onMounted(() => {
         }
         bus?.add(created);
         // 늦게 붙은 tauri 채널이 있어도 채팅창이 다시 알리도록 유도
-        bus?.post({ kind: "main-ready" });
+        bus?.post({ kind: "main-ready", mainId });
       })
       .catch(() => undefined);
   }
   try {
     // 늦게 뜬 채팅창이 자신을 다시 알리도록 유도 (새로고침 복귀 대응)
-    bus.post({ kind: "main-ready" });
+    bus.post({ kind: "main-ready", mainId });
   } catch {
     // 무시 (BroadcastChannel 미지원 환경)
   }

@@ -5,6 +5,7 @@ import {
   createChatBusHub,
   createTauriChatBus,
   currentChatPeerFromUrl,
+  currentMainIdFromUrl,
   isTauriRuntime,
   type ChatBus,
   type ChatBusHandler,
@@ -27,6 +28,9 @@ const LINK_TIMEOUT_MS = 3500;
 
 export function useChatPeer(peer: { readonly value: string }) {
   const store = useChatSocket();
+
+  // 이 팝업이 속한 메인 탭 ID (?mainId=). A탭/B탭 버스 섞임 방지용.
+  const myMainId = currentMainIdFromUrl();
 
   // Tauri 채팅 윈도우 판별: Tauri 런타임 + URL이 #/chat/... 인 경우.
   // 이 모드에서는 localStorage 세션이 없어도 스냅샷을 기다리며 표시한다.
@@ -78,8 +82,12 @@ export function useChatPeer(peer: { readonly value: string }) {
   };
 
   const handleBusMessage: ChatBusHandler = (msg) => {
+    // mainId가 있고 내 메인 탭과 다르면 무시 (A탭/B탭 버스 섞임 방지).
+    // mainId 없는 구버전 메시지는 받아준다.
+    if ("mainId" in msg && msg.mainId !== undefined && myMainId !== null && msg.mainId !== myMainId) return;
     if (msg.kind === "chat-state") {
       if (msg.peer !== effectivePeer.value) return;
+      // 상대 메인 탭(A)의 chat-state가 내 팝업(B)에 와도 peer가 다르면 무시됨.
       applyState(msg.myNickname, msg.messages, msg.connectionStatus, msg.isConnected);
     } else if (msg.kind === "main-ready") {
       // 메인 창이 (재)시작됐을 때 다시 자신을 알린다
@@ -118,7 +126,7 @@ export function useChatPeer(peer: { readonly value: string }) {
       store.clearUnread(target);
     }
     try {
-      bus?.post({ kind: "chat-open", peer: target });
+      bus?.post({ kind: "chat-open", peer: target, mainId: myMainId ?? undefined });
     } catch {
       // 무시
     }
@@ -129,7 +137,7 @@ export function useChatPeer(peer: { readonly value: string }) {
     if (!target) return;
     if (direct.value) return;
     try {
-      bus?.post({ kind: "chat-close", peer: target });
+      bus?.post({ kind: "chat-close", peer: target, mainId: myMainId ?? undefined });
     } catch {
       // 무시
     }
@@ -147,7 +155,7 @@ export function useChatPeer(peer: { readonly value: string }) {
     }
     if (!linked.value || !busIsConnected.value) return false;
     try {
-      bus?.post({ kind: "chat-send", peer: target, text: trimmed, id: genSendId() });
+      bus?.post({ kind: "chat-send", peer: target, text: trimmed, id: genSendId(), mainId: myMainId ?? undefined });
     } catch {
       return false;
     }
@@ -216,7 +224,10 @@ export function useChatPeer(peer: { readonly value: string }) {
     bus = null;
   });
 
-  // 화면에 보이는 메시지가 늘어나면 읽음 처리 요청 (메인 unread 뱃지 정리용)
+  // 화면에 보이는 메시지가 늘어나면 읽음 처리 요청 (메인 unread 뱃지 정리용).
+  // NOTE: chat-state 스냅샷 통째 교체(0→1) 때도 1회는 chat-read를 보낸다.
+  // 메인은 chat-read에 broadcastPeer로만 응답하므로 핑퐁이 돌지 않는다
+  // (룸 unread/DM unread watch와 분리되어 있음).
   watch(
     () => messages.value.length,
     (len, prev) => {
@@ -225,7 +236,7 @@ export function useChatPeer(peer: { readonly value: string }) {
           store.clearUnread(effectivePeer.value);
         } else if (linked.value) {
           try {
-            bus?.post({ kind: "chat-read", peer: effectivePeer.value });
+            bus?.post({ kind: "chat-read", peer: effectivePeer.value, mainId: myMainId ?? undefined });
           } catch {
             // 무시
           }

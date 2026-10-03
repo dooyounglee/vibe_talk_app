@@ -33,20 +33,20 @@ export interface RoomStatePayload {
 
 export type ChatBusMessage =
   // 1:1 채팅창 → 메인
-  | { kind: "chat-open"; peer: string }
-  | { kind: "chat-close"; peer: string }
-  | { kind: "chat-read"; peer: string }
-  | { kind: "chat-send"; peer: string; text: string; id: string }
+  | { kind: "chat-open"; peer: string; mainId?: string }
+  | { kind: "chat-close"; peer: string; mainId?: string }
+  | { kind: "chat-read"; peer: string; mainId?: string }
+  | { kind: "chat-send"; peer: string; text: string; id: string; mainId?: string }
   // 번호방 채팅창 → 메인
-  | { kind: "room-open"; roomId: number }
-  | { kind: "room-close"; roomId: number }
-  | { kind: "room-read"; roomId: number }
-  | { kind: "room-send"; roomId: number; text: string; id: string }
+  | { kind: "room-open"; roomId: number; mainId?: string }
+  | { kind: "room-close"; roomId: number; mainId?: string }
+  | { kind: "room-read"; roomId: number; mainId?: string }
+  | { kind: "room-send"; roomId: number; text: string; id: string; mainId?: string }
   // 메인 → 채팅창
-  | ({ kind: "chat-state" } & ChatStatePayload)
-  | ({ kind: "room-state" } & RoomStatePayload)
-  | { kind: "main-ready" }
-  | { kind: "main-closing" };
+  | ({ kind: "chat-state" } & ChatStatePayload & { mainId?: string })
+  | ({ kind: "room-state" } & RoomStatePayload & { mainId?: string })
+  | { kind: "main-ready"; mainId?: string }
+  | { kind: "main-closing"; mainId?: string };
 
 export type ChatBusHandler = (msg: ChatBusMessage) => void;
 
@@ -175,9 +175,33 @@ export function createTauriChatBus(
 }
 
 // 방 번호로 여는 단체 채팅방. 새 창으로 열리면 소켓 없이 버스로만 동작한다.
+function currentHash(): string {
+  try {
+    return window.location.hash;
+  } catch {
+    return "";
+  }
+}
+
+/** 팝업 URL에 심어둔 메인 창 ID (?mainId=...). 같은 origin 탭끼리 버스 섞임 방지용 */
+export function currentMainIdFromUrl(): string | null {
+  try {
+    const hash = currentHash();
+    const qIndex = hash.indexOf("?");
+    if (qIndex < 0) return null;
+    const query = hash.slice(qIndex + 1);
+    const params = new URLSearchParams(query);
+    const v = params.get("mainId") ?? params.get("mainid");
+    if (!v || v.trim() === "") return null;
+    return v;
+  } catch {
+    return null;
+  }
+}
+
 function currentChatRoomIdFromUrl(): number | null {
   try {
-    const hash = window.location.hash;
+    const hash = currentHash();
     const match = hash.match(/^#\/room\/(\d+)/);
     if (!match) return null;
     const id = Number(match[1]);
@@ -195,7 +219,7 @@ export function currentRoomIdFromUrl(): number | null {
 /** 현재 라우트가 1:1 채팅방(#/chat/...)인지 */
 export function currentChatPeerFromUrl(): string | null {
   try {
-    const hash = window.location.hash;
+    const hash = currentHash();
     const match = hash.match(/^#\/chat\/([^?#]+)/);
     if (!match) return null;
     return decodeURIComponent(match[1] ?? "");
