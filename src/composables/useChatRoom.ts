@@ -145,9 +145,19 @@ export function useChatRoom(roomId: { readonly value: number }) {
     announceClose();
   };
 
+  // 같은 탭에서 라우트만 바뀌면 컴포넌트가 재사용되므로(언마운트 없음)
+  // 방이 바뀔 때마다 다시 DB 최근 10건을 조회한다.
+  watch(effectiveRoomId, (rid) => {
+    if (!direct.value || !rid) return;
+    store.clearRoomUnread(rid);
+    store.requestRoomHistory(rid);
+  });
+
   onMounted(() => {
     if (direct.value) {
       store.clearRoomUnread(effectiveRoomId.value);
+      // 채팅창이 열릴 때마다 DB에서 최근 10건을 조회해 오도록 요청
+      store.requestRoomHistory(effectiveRoomId.value);
       return;
     }
     bus = createChatBusHub();

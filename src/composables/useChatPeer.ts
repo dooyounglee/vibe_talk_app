@@ -166,9 +166,19 @@ export function useChatPeer(peer: { readonly value: string }) {
     announceClose();
   };
 
+  // 같은 탭에서 라우트만 바뀌면 컴포넌트가 재사용되므로(언마운트 없음)
+  // 상대가 바뀔 때마다 다시 DB 최근 10건을 조회한다.
+  watch(effectivePeer, (peer) => {
+    if (!direct.value || !peer) return;
+    store.clearUnread(peer);
+    store.requestDmHistory(peer);
+  });
+
   onMounted(() => {
     if (direct.value) {
       store.clearUnread(effectivePeer.value);
+      // 채팅창이 열릴 때마다 DB에서 최근 10건을 조회해 오도록 요청
+      store.requestDmHistory(effectivePeer.value);
       return;
     }
     // 버스 허브: BroadcastChannel + (Tauri면) tauri event를 동시에 붙인다.

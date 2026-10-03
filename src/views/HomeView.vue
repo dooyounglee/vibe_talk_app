@@ -43,6 +43,8 @@ const {
   manualReconnect,
   disconnect,
   sendDm,
+  requestDmHistory,
+  requestRoomHistory,
   clearUnread,
   clearRoomUnread,
   createRoom,
@@ -119,6 +121,9 @@ const openBrowserChatWindow = (peer: string, focusExisting: boolean) => {
       existing.focus();
     }
     clearUnread(peer);
+    // 이미 열려 있던 창을 다시 열 때는 chat-open 재알림이 없으므로 여기서 조회 요청
+    // (새로 여는 창은 팝업의 chat-open 시점에 요청된다)
+    requestDmHistory(peer);
     return;
   }
   // 더블클릭 제스처 안에서 동기로 열어야 팝업 차단을 피할 수 있다.
@@ -170,6 +175,8 @@ const openTauriChatWindowWith = async (
       await existing.setFocus().catch(() => undefined);
     }
     clearUnread(peer);
+    // 이미 열려 있던 창을 다시 열 때는 chat-open 재알림이 없으므로 여기서 조회 요청
+    requestDmHistory(peer);
     return;
   }
   // dev(http://localhost:1420)와 build(file://../dist) 모두에서 동작하도록
@@ -212,6 +219,8 @@ const openBrowserRoomWindow = (roomId: number, focusExisting: boolean) => {
   if (existing && !existing.closed) {
     if (focusExisting) existing.focus();
     clearRoomUnread(roomId);
+    // 이미 열려 있던 창을 다시 열 때는 room-open 재알림이 없으므로 여기서 조회 요청
+    requestRoomHistory(roomId);
     return;
   }
   const url = `${window.location.origin}${window.location.pathname}#/room/${roomId}?mainId=${encodeURIComponent(mainId)}`;
@@ -247,6 +256,8 @@ const openTauriRoomWindowWith = async (
     await existing.show().catch(() => undefined);
     if (focusExisting) await existing.setFocus().catch(() => undefined);
     clearRoomUnread(roomId);
+    // 이미 열려 있던 창을 다시 열 때는 room-open 재알림이 없으므로 여기서 조회 요청
+    requestRoomHistory(roomId);
     return;
   }
   const child = new Ctor(label, {
@@ -458,11 +469,16 @@ onMounted(() => {
     // 다른 탭(다른 mainId)의 팝업 메시지는 무시 (A탭/B탭 버스 섞임 방지)
     if ("mainId" in msg && msg.mainId !== undefined && msg.mainId !== mainId) return;
     switch (msg.kind) {
-      case "chat-open":
+      case "chat-open": {
+        // 채팅창이 열릴 때마다 서버에 DB 최근 10건을 요청한다.
+        // (이미 열려 있던 창의 재알림은 openPeers 추가 시점에 한해 1회만 요청)
+        const firstOpen = !openPeers.has(msg.peer);
         openPeers.add(msg.peer);
         clearUnread(msg.peer);
         broadcastPeer(msg.peer);
+        if (firstOpen) requestDmHistory(msg.peer);
         break;
+      }
       case "chat-close":
         openPeers.delete(msg.peer);
         break;
@@ -485,11 +501,15 @@ onMounted(() => {
         broadcastPeer(msg.peer);
         break;
       }
-      case "room-open":
+      case "room-open": {
+        // 채팅창이 열릴 때마다 서버에 DB 최근 10건을 요청한다.
+        const firstOpen = !openRooms.has(msg.roomId);
         openRooms.add(msg.roomId);
         clearRoomUnread(msg.roomId);
         broadcastRoom(msg.roomId);
+        if (firstOpen) requestRoomHistory(msg.roomId);
         break;
+      }
       case "room-close":
         openRooms.delete(msg.roomId);
         break;

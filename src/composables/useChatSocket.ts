@@ -1,11 +1,5 @@
 import { ref } from "vue";
 import type { ChatMessage, RoomInfo } from "../types/chat";
-import {
-  DM_HISTORY_STORAGE_KEY,
-  MAX_DM_HISTORY_PER_PEER,
-  MAX_ROOM_HISTORY_PER_ROOM,
-  ROOM_HISTORY_STORAGE_KEY,
-} from "../constants";
 
 // ─── 모듈 싱글톤 상태 ───
 // 같은 윈도우(JS 컨텍스트) 안에서는 하나의 WebSocket만 유지한다.
@@ -37,16 +31,9 @@ const roomMessages = ref<Record<number, Array<ChatMessage>>>({});
 const roomUnread = ref<Record<number, number>>({});
 const roomMembers = ref<Record<number, Array<string>>>({});
 
-// 접속 직후 서버가 한 번만 보내주는 지난 대화 내역(history_dm / history_room)의
-// 중복 적용 방지 플래그. 새 접속(connect)마다 초기화되며, 같은 내역이 두 번
-// 수신되더라도 목록에 두 번 붙지 않도록 1회만 반영한다.
-const dmHistoryApplied = new Set<string>();
-const roomHistoryApplied = new Set<number>();
-
-const resetHistoryGuards = () => {
-  dmHistoryApplied.clear();
-  roomHistoryApplied.clear();
-};
+// 채팅창 열람 시 서버에 최신 내역을 요청하는 플래그/가드 없이
+// 서버가 내려준 history_dm / history_room은 항상 해당 박스를 덮어쓴다.
+// (접속 시 일괄 푸시를 제거하고, 창을 열 때마다 DB에서 최근 10건을 조회해 오기 때문)
 
 // WebSocket 인스턴스 (윈도우당 1개)
 let ws: WebSocket | null = null;
@@ -65,58 +52,8 @@ const ensureDmBox = (peer: string): Array<ChatMessage> => {
 
 const pushDm = (peer: string, msg: ChatMessage, fromSelf: boolean) => {
   ensureDmBox(peer).push(msg);
-  // 메인 창 새로고침 후에도 대화가 유지되도록 localStorage에 보관
-  persistDmHistory();
   if (!fromSelf) {
     unreadCounts.value[peer] = (unreadCounts.value[peer] ?? 0) + 1;
-  }
-};
-
-// localStorage에서 대화 내역을 읽어온다 (같은 닉네임 세션인 경우에만 복원)
-const restoreDmHistory = () => {
-  try {
-    const raw = localStorage.getItem(DM_HISTORY_STORAGE_KEY);
-    if (!raw) return;
-    const parsed = JSON.parse(raw) as {
-      nickname?: string;
-      boxes?: Record<string, Array<ChatMessage>>;
-    };
-    if (parsed.nickname !== nickname.value) return;
-    if (!parsed.boxes || typeof parsed.boxes !== "object") return;
-    const boxes: Record<string, Array<ChatMessage>> = {};
-    for (const [peer, list] of Object.entries(parsed.boxes)) {
-      if (Array.isArray(list)) {
-        boxes[peer] = list
-          .filter(
-            (m): m is ChatMessage =>
-              !!m && typeof m === "object" && typeof m.text === "string",
-          )
-          .slice(-MAX_DM_HISTORY_PER_PEER)
-          .map((m) => ({
-            type: String(m.type ?? "dm"),
-            nickname: String(m.nickname ?? peer),
-            text: String(m.text ?? ""),
-          }));
-      }
-    }
-    dmMessages.value = boxes;
-  } catch {
-    // 무시 (깨진 저장값 등)
-  }
-};
-
-const persistDmHistory = () => {
-  try {
-    const boxes: Record<string, Array<ChatMessage>> = {};
-    for (const [peer, list] of Object.entries(dmMessages.value)) {
-      boxes[peer] = list.slice(-MAX_DM_HISTORY_PER_PEER);
-    }
-    localStorage.setItem(
-      DM_HISTORY_STORAGE_KEY,
-      JSON.stringify({ nickname: nickname.value, boxes }),
-    );
-  } catch {
-    // 무시 (용량 초과 등)
   }
 };
 
@@ -139,21 +76,6 @@ const ensureRoomBox = (roomId: number): Array<ChatMessage> => {
   return roomMessages.value[roomId];
 };
 
-const persistRoomHistory = () => {
-  try {
-    const boxes: Record<number, Array<ChatMessage>> = {};
-    for (const [roomId, list] of Object.entries(roomMessages.value)) {
-      boxes[Number(roomId)] = list.slice(-MAX_ROOM_HISTORY_PER_ROOM);
-    }
-    localStorage.setItem(
-      ROOM_HISTORY_STORAGE_KEY,
-      JSON.stringify({ nickname: nickname.value, boxes }),
-    );
-  } catch {
-    // 무시 (용량 초과 등)
-  }
-};
-
 interface HistoryEntry {
   nickname?: string;
   text?: string;
@@ -172,7 +94,7 @@ interface IncomingPayload {
   isDeleted?: boolean;
   is_deleted?: number;
   ok?: boolean;
-  // 접속 직후 서버가 보내주는 지난 대화 내역 (history_dm / history_room)
+  // 채팅창 열람 시 서버가 보내주는 지난 대화 내역 (history_dm / history_room)
   withUser?: string;
   messages?: Array<HistoryEntry>;
   // 번호방
@@ -254,14 +176,10 @@ const handleIncoming = (raw: string) => {
         timestamp: Date.now(),
         roomId,
       });
-      persistRoomHistory();
     }
   } else if (data.type === "history_dm") {
     const withUser = String(data.withUser ?? "");
     if (!withUser) return;
-    // 같은 상대에 대한 history_dm은 한 번만 반영한다.
-    if (dmHistoryApplied.has(withUser)) return;
-    dmHistoryApplied.add(withUser);
     const history: Array<ChatMessage> = (
       Array.isArray(data.messages) ? data.messages : []
     ).map((msg) => ({
@@ -270,10 +188,8 @@ const handleIncoming = (raw: string) => {
       text: String(msg?.text ?? ""),
       timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
     }));
-    // 해당 상대의 대화 박스를 만들고(없으면 생성) 맨 앞에 삽입
-    ensureDmBox(withUser).unshift(...history);
-    // 새로고침 복원용 로컬 저장소에도 반영
-    persistDmHistory();
+    // 채팅창을 열 때마다 서버가 보내는 DB 최신 내역(10건)으로 박스를 덮어쓴다.
+    dmMessages.value[withUser] = history;
   } else if (data.type === "my_rooms" || data.type === "room_created") {
     const rooms = Array.isArray(data.rooms) ? data.rooms : [];
     myRooms.value = rooms
@@ -291,7 +207,6 @@ const handleIncoming = (raw: string) => {
         ),
       }));
     pruneRooms();
-    persistRoomHistory();
   } else if (data.type === "history_room") {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
@@ -304,17 +219,9 @@ const handleIncoming = (raw: string) => {
       timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
       roomId,
     }));
-    // NOTE: 접속 직후(join) 복원은 1회만 반영한다.
-    // 반면 DM 전송 시 서버가 함께 내려주는 1:1 자동방 history는
-    // 매번 최신 스냅샷으로 교체한다 (방을 열면 첫 메시지부터 이어보이게).
-    // room_message로 오지 않으므로 방 창 자동팝업/unread 증가는 없다.
-    if (roomHistoryApplied.has(roomId)) {
-      roomMessages.value[roomId] = history;
-    } else {
-      roomHistoryApplied.add(roomId);
-      ensureRoomBox(roomId).unshift(...history);
-    }
-    persistRoomHistory();
+    // NOTE: 채팅창을 열 때마다 서버가 보내는 DB 최신 내역(10건)으로 항상 덮어쓴다.
+    // (접속 시 일괄 푸시 제거 + 창 열람 시 새로 조회)
+    roomMessages.value[roomId] = history;
   } else if (data.type === "room_message") {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
@@ -328,7 +235,6 @@ const handleIncoming = (raw: string) => {
       roomId,
     };
     ensureRoomBox(roomId).push(msg);
-    persistRoomHistory();
     if (!isSelf) {
       roomUnread.value[roomId] = (roomUnread.value[roomId] ?? 0) + 1;
     }
@@ -345,7 +251,6 @@ const handleIncoming = (raw: string) => {
     delete roomMessages.value[roomId];
     delete roomUnread.value[roomId];
     delete roomMembers.value[roomId];
-    persistRoomHistory();
   } else if (data.type === "room_join_failed") {
     // 실패 사유는 화면에서 system 메시지로 노출한다 (HomeView에서 처리)
     const roomId = Number(data.roomId);
@@ -415,7 +320,6 @@ const createRoomAction = (name: string, members: string[] = []): boolean => {
 const joinRoom = (roomId: number): boolean => {
   if (!Number.isInteger(roomId)) return false;
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-  roomHistoryApplied.delete(roomId);
   ws.send(JSON.stringify({ type: "room_join", roomId }));
   return true;
 };
@@ -445,6 +349,24 @@ const sendRoom = (roomId: number, text: string): boolean => {
   if (trimmed === "" || !Number.isInteger(roomId)) return false;
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   ws.send(JSON.stringify({ type: "room_message", roomId, text: trimmed }));
+  return true;
+};
+
+// ─── 채팅창 열람: DB 최근 10건 조회 요청 ───
+// 채팅창(1:1/단체)이 열릴 때마다 호출하며, 서버는 history_dm / history_room으로
+// 최근 10건을 내려준다 (수신 시 해당 박스를 덮어쓴다).
+const requestDmHistory = (peer: string): boolean => {
+  const target = peer.trim();
+  if (!target) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "dm_history", withUser: target }));
+  return true;
+};
+
+const requestRoomHistory = (roomId: number): boolean => {
+  if (!Number.isInteger(roomId) || roomId <= 0) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_history", roomId }));
   return true;
 };
 
@@ -500,8 +422,7 @@ const connect = (nicknameInput: string): boolean => {
     roomUnread.value = {};
     roomMembers.value = {};
   }
-  // 새 접속에서는 접속 직후 오는 히스토리를 다시 받는다.
-  resetHistoryGuards();
+  // 새 접속에서는 채팅창을 열 때마다 다시 조회한다.
   isManuallyDisconnected.value = false;
   if (reconnectTimer.value) {
     clearTimeout(reconnectTimer.value);
@@ -521,8 +442,6 @@ const connect = (nicknameInput: string): boolean => {
     socket.send(JSON.stringify({ type: "join", nickname: nickname.value }));
     isConnected.value = true;
     connectionStatus.value = "연결됨";
-    // 새로고침 전 대화 내역을 복원 (서버에 저장되지 않는 로컬 히스토리)
-    restoreDmHistory();
     if (reconnectTimer.value) {
       clearTimeout(reconnectTimer.value);
       reconnectTimer.value = null;
@@ -574,20 +493,13 @@ const disconnect = () => {
   ws = null;
   isConnected.value = false;
   connectionStatus.value = "연결 끊김";
-  // 명시적 나가기이므로 로컬 히스토리도 함께 정리
-  try {
-    localStorage.removeItem(DM_HISTORY_STORAGE_KEY);
-    localStorage.removeItem(ROOM_HISTORY_STORAGE_KEY);
-  } catch {
-    // 무시
-  }
+  // 명시적 나가기이므로 대화 상태도 함께 정리
   dmMessages.value = {};
   unreadCounts.value = {};
   myRooms.value = [];
   roomMessages.value = {};
   roomUnread.value = {};
   roomMembers.value = {};
-  resetHistoryGuards();
 };
 
 /**
@@ -625,6 +537,8 @@ export function useChatSocket() {
     deleteRoom,
     refreshRooms,
     sendRoom,
+    requestDmHistory,
+    requestRoomHistory,
     upsertUser,
   };
 }

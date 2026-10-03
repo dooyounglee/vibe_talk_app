@@ -2,12 +2,4 @@
 export const NICKNAME_STORAGE_KEY = "vibe_talk_nickname";
 /** 탭별 메인 창 ID 키 (sessionStorage, 탭 격리용) */
 export const MAIN_ID_STORAGE_KEY = "vibe_talk_main_id";
-/** localStorage에 저장하는 1:1 대화 내역 키 (메인 창 새로고침 복원용) */
-export const DM_HISTORY_STORAGE_KEY = "vibe_talk_dm_history";
-/** localStorage에 저장하는 번호방 대화 내역 키 (메인 창 새로고침 복원용) */
-export const ROOM_HISTORY_STORAGE_KEY = "vibe_talk_room_history";
-/** 상대별 보관할 최대 메시지 수 */
-export const MAX_DM_HISTORY_PER_PEER = 200;
-/** 방별 보관할 최대 메시지 수 */
-export const MAX_ROOM_HISTORY_PER_ROOM = 200;
 
