@@ -283,6 +283,12 @@ const handleIncoming = (raw: string) => {
         name: String(r.name ?? ""),
         owner: String(r.owner ?? ""),
         memberCount: Number(r.memberCount ?? 0),
+        // 서버가 내려준 사용자별 표시제목 (1:1=상대닉네임), 없으면 name으로 폴백
+        displayName: String(
+          typeof r.displayName === "string" && r.displayName.trim() !== ""
+            ? r.displayName
+            : (r.name ?? ""),
+        ),
       }));
     pruneRooms();
     persistRoomHistory();

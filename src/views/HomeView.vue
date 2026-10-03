@@ -235,7 +235,11 @@ const openTauriRoomWindowWith = async (
   }
   const child = new Ctor(label, {
     url: `#/room/${roomId}`,
-    title: `채팅방 #${roomId}`,
+    title: (() => {
+      const info = myRooms.value.find((r) => r.roomId === roomId);
+      const disp = info?.displayName?.trim() ? info.displayName : info?.name;
+      return disp ? `#${roomId} ${disp}` : `채팅방 #${roomId}`;
+    })(),
     width: 420,
     height: 640,
     resizable: true,
@@ -278,7 +282,7 @@ const broadcastRoom = (roomId: number) => {
   bus.post({
     kind: "room-state",
     roomId,
-    roomName: info?.name ?? "",
+    roomName: (info?.displayName?.trim() ? info.displayName : info?.name) ?? "",
     myNickname: nickname.value,
     messages: [...(roomMessages.value[roomId] ?? [])],
     members: [...(roomMembers.value[roomId] ?? [])],

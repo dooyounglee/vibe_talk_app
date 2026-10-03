@@ -114,9 +114,13 @@ export function useChatRoom(roomId: { readonly value: number }) {
   const myNickname: ComputedRef<string> = computed(() =>
     direct.value ? store.nickname.value : busNickname.value,
   );
-  const rname: ComputedRef<string> = computed(() =>
-    direct.value ? (myInfo.value?.name ?? "") : busRoomName.value,
-  );
+  const rname: ComputedRef<string> = computed(() => {
+    if (!direct.value) return busRoomName.value;
+    const info = myInfo.value;
+    if (!info) return "";
+    // 사용자별 표시제목 우선 (1:1=상대닉네임), 없으면 rooms.name 폴백
+    return info.displayName?.trim() ? info.displayName : (info.name ?? "");
+  });
   const members: ComputedRef<string[]> = computed(() =>
     direct.value
       ? (store.roomMembers.value[effectiveRoomId.value] ?? [])

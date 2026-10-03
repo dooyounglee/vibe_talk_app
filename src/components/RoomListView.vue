@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import type { RoomInfo } from "../types/chat";
+import { roomDisplayName } from "../types/chat";
 
 defineProps<{
   myNickname: string;
@@ -48,7 +49,7 @@ const closeMenu = () => {
       <li v-for="room in rooms" :key="room.roomId" class="room-item" @dblclick="$emit('open-room', room.roomId)">
         <span class="room-id">#{{ room.roomId }}</span>
         <span class="room-main">
-          <span class="room-name">{{ room.name }}</span>
+          <span class="room-name">{{ roomDisplayName(room) }}</span>
           <span class="room-meta">방장 {{ room.owner }} · {{ room.memberCount }}명</span>
         </span>
         <span v-if="(unread[room.roomId] ?? 0) > 0" class="badge">{{ unread[room.roomId] }}</span>
