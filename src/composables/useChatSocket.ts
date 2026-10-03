@@ -295,8 +295,6 @@ const handleIncoming = (raw: string) => {
   } else if (data.type === "history_room") {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
-    if (roomHistoryApplied.has(roomId)) return;
-    roomHistoryApplied.add(roomId);
     const history: Array<ChatMessage> = (
       Array.isArray(data.messages) ? data.messages : []
     ).map((msg) => ({
@@ -306,7 +304,16 @@ const handleIncoming = (raw: string) => {
       timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
       roomId,
     }));
-    ensureRoomBox(roomId).unshift(...history);
+    // NOTE: 접속 직후(join) 복원은 1회만 반영한다.
+    // 반면 DM 전송 시 서버가 함께 내려주는 1:1 자동방 history는
+    // 매번 최신 스냅샷으로 교체한다 (방을 열면 첫 메시지부터 이어보이게).
+    // room_message로 오지 않으므로 방 창 자동팝업/unread 증가는 없다.
+    if (roomHistoryApplied.has(roomId)) {
+      roomMessages.value[roomId] = history;
+    } else {
+      roomHistoryApplied.add(roomId);
+      ensureRoomBox(roomId).unshift(...history);
+    }
     persistRoomHistory();
   } else if (data.type === "room_message") {
     const roomId = Number(data.roomId);
