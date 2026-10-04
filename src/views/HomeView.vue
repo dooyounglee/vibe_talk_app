@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { WebviewWindow as WebviewWindowInstance } from "@tauri-apps/api/webviewWindow";
@@ -15,7 +15,6 @@ import {
   createChatBus,
   createChatBusHub,
   createTauriChatBus,
-  currentChatPeerFromUrl,
   currentRoomIdFromUrl,
   dedupeKeyFor,
   isTauriRuntime,
@@ -25,12 +24,12 @@ import {
 import { MAIN_ID_STORAGE_KEY, NICKNAME_STORAGE_KEY } from "../constants";
 
 // 이 메인 창이 유일한 WebSocket 소유자.
-// 채팅창(별도 윈도우)은 소켓을 만들지 않고 이벤트 버스로 상태를 받아간다.
+// 채팅방 창(별도 윈도우)은 소켓을 만들지 않고 이벤트 버스로 상태를 받아간다.
+// NOTE: 1:1 대화도 방 하나이므로 채팅창 종류는 '방 창' 하나뿐이다.
 const {
   nickname,
   isConnected,
   connectionStatus,
-  dmMessages,
   userlist,
   onlineUsers,
   usersDetail,
@@ -42,18 +41,13 @@ const {
   roomUnread,
   roomMembers,
   findOneToOneRoomId,
-  oneToOnePeerOfRoom,
   connect,
   manualReconnect,
   disconnect,
-  sendDm,
-  requestDmHistory,
+  requestOneToOneRoom,
   requestRoomHistory,
-  clearUnread,
   clearRoomUnread,
-  setPeerFocus,
   setRoomFocus,
-  forgetPeerFocus,
   forgetRoomFocus,
   createRoom,
   joinRoom,
@@ -81,23 +75,19 @@ const getMainId = (): string => {
   }
 };
 const mainId = getMainId();
-// Tauri 채팅 윈도우(#/chat/... 또는 #/room/...)에서는 메인 로직을 동작시키지 않는다.
+// Tauri 채팅 윈도우(#/room/...)에서는 메인 로직을 동작시키지 않는다.
 // (이 윈도우는 소켓을 만들지 않고 메인 윈도우의 스냅샷만 받아 표시한다)
-const isTauriChatWindow =
-  currentChatPeerFromUrl() !== null || currentRoomIdFromUrl() !== null;
+const isTauriChatWindow = currentRoomIdFromUrl() !== null;
 
 // 화면 상태: false = 1번 화면(닉네임 입력), true = 2번 화면(방 목록 + 사용자 목록)
 const entered = ref(false);
-// 메인 화면 탭: 'rooms' = 내 채팅방, 'users' = 사용자(DM용, DB 등록 전체/탈퇴 제외)
+// 메인 화면 탭: 'rooms' = 내 채팅방, 'users' = 사용자(1:1 시작점, DB 등록 전체/탈퇴 제외)
 const mainTab = ref<"rooms" | "users">("rooms");
-// 상대별 1:1 채팅창 (웹: window.open 팝업 핸들 / Tauri: WebviewWindow)
-const chatWindows = ref(new Map<string, Window | null>());
-const tauriChatWindows = new Map<string, WebviewWindowInstance>();
 // 방별 채팅창 (웹: window.open 팝업 핸들 / Tauri: WebviewWindow)
+// 1:1 대화도 이 방 창을 쓴다.
 const roomWindows = ref(new Map<number, Window | null>());
 const tauriRoomWindows = new Map<number, WebviewWindowInstance>();
 // 이벤트로 상태를 받아가는 채팅창 목록 (스냅샷 브로드캐스트 대상)
-const openPeers = new Set<string>();
 const openRooms = new Set<number>();
 const seenBusMessages = new Set<string>();
 let bus: (ChatBus & { add: (bus: ChatBus | null) => void }) | null = null;
@@ -114,185 +104,11 @@ const clearWindowError = () => {
   windowError.value = "";
 };
 
-// 윈도우 라벨에 쓸 수 없는 문자를 제거 (상대별 1창 유지용)
-const chatWindowLabel = (peer: string) =>
-  `chat_${Array.from(peer)
-    .map((ch) => (/[a-zA-Z0-9_]/.test(ch) ? ch : "_"))
-    .join("")
-    .slice(0, 40)}_${Array.from(peer).length}`;
-
-// 웹 브라우저용: window.open 팝업으로 채팅창을 연다
-const openBrowserChatWindow = (peer: string, focusExisting: boolean) => {
-  // 같은 대화가 '내 채팅방' 탭에서 띄운 1:1 방창으로 이미 떠 있으면 새 창을 띄우지 않고 focus만 준다
-  if (focusBrowserRoomWindowOfPeer(peer)) return;
-  const existing = chatWindows.value.get(peer);
-  if (existing && !existing.closed) {
-    if (focusExisting) {
-      existing.focus();
-    }
-    clearUnread(peer);
-    // 이미 열려 있던 창을 다시 열 때는 chat-open 재알림이 없으므로 여기서 조회 요청
-    // (새로 여는 창은 팝업의 chat-open 시점에 요청된다)
-    requestDmHistory(peer);
-    return;
-  }
-  // 더블클릭 제스처 안에서 동기로 열어야 팝업 차단을 피할 수 있다.
-  // Tauri dev의 http://localhost:1420 에서도 동일 origin 팝업으로 동작한다.
-  // ?mainId= 로 어느 메인 탭의 팝업인지 표시 (A/B 탭 버스 섞임 방지)
-  const url = `${window.location.origin}${window.location.pathname}#/chat/${encodeURIComponent(peer)}?mainId=${encodeURIComponent(mainId)}`;
-  const child = window.open(
-    url,
-    `vibe_talk_chat_${chatWindowLabel(peer)}`,
-    "width=420,height=640,menubar=no,toolbar=no,location=no,status=no,resizable=yes",
-  );
-  if (child) {
-    chatWindows.value.set(peer, child);
-  } else {
-    console.warn(
-      "[vibe-talk] 팝업이 차단되었습니다. 브라우저 팝업 허용 후 다시 시도하세요:",
-      peer,
-    );
-    // 팝업이 막히면 "사용자가 직접 더블클릭한 경우"에만 같은 탭 라우팅으로 대체한다.
-    // (새 DM 수신 같은 자동 오픈까지 메인 화면을 빼앗지 않도록)
-    // 소켓은 같은 JS 컨텍스트 싱글톤이라 끊기지 않는다.
-    if (focusExisting) {
-      routerPushChat(peer);
-    }
-  }
-  clearUnread(peer);
-};
-
-const routerPushChat = (peer: string) => {
-  try {
-    void router.push({ name: "chat", params: { peer } });
-  } catch {
-    // 무시
-  }
-};
-
-// Tauri용: WebviewWindow API로 OS 네이티브 자식 윈도우를 연다
-// (정적/동적 어떤 경로로 얻은 클래스든 동일 시그니처라 그대로 받는다)
-const openTauriChatWindowWith = async (
-  Ctor: typeof WebviewWindow,
-  peer: string,
-  focusExisting: boolean,
-) => {
-  // 같은 대화가 '내 채팅방' 탭에서 띄운 1:1 방창으로 이미 떠 있으면 새 창을 띄우지 않고 focus만 준다
-  if (await focusTauriRoomWindowOfPeer(Ctor, peer)) return;
-  const label = chatWindowLabel(peer);
-  const existing = await Ctor.getByLabel(label);
-  if (existing) {
-    await existing.show().catch(() => undefined);
-    if (focusExisting) {
-      await existing.setFocus().catch(() => undefined);
-    }
-    clearUnread(peer);
-    // 이미 열려 있던 창을 다시 열 때는 chat-open 재알림이 없으므로 여기서 조회 요청
-    requestDmHistory(peer);
-    return;
-  }
-  // dev(http://localhost:1420)와 build(file://../dist) 모두에서 동작하도록
-  // 현재 페이지 기준 상대 경로 + 해시 라우트를 사용한다.
-  const child = new Ctor(label, {
-    url: `#/chat/${encodeURIComponent(peer)}?mainId=${encodeURIComponent(mainId)}`,
-    title: `${peer}님과의 1:1 채팅`,
-    width: 420,
-    height: 640,
-    resizable: true,
-    visible: true,
-    focus: true,
-    center: true,
-  });
-  tauriChatWindows.set(peer, child);
-  // 최초 스냅샷: 윈도우가 뜬 뒤 chat-open을 보내오면 응답하지만,
-  // 혹시 놓치더라도 여기서 한 번 밀어준다
-  await child.once("tauri://created", () => {
-    clearWindowError();
-    setTimeout(() => {
-      broadcastPeer(peer);
-    }, 600);
-  });
-  await child.once("tauri://error", (e) => {
-    const detail =
-      typeof e === "object" && e !== null && "payload" in e
-        ? JSON.stringify((e as { payload: unknown }).payload)
-        : String(e);
-    console.error("[vibe-talk] 채팅 윈도우 생성 실패:", peer, detail);
-    showWindowError(`채팅 윈도우 생성 실패: ${detail}`);
-  });
-  clearUnread(peer);
-};
-
 // 번호방: 새 창 열기 (웹 팝업 / Tauri WebviewWindow)
+// NOTE: 1:1 대화도 이 창을 쓴다(1:1 = 멤버 2명 방).
 const roomWindowLabel = (roomId: number) => `room_${roomId}`;
 
-// ─── 이미 떠 있는 채팅창 재사용 (focus만 줌) ───
-// '내 채팅방' 탭의 1:1 방창과 '사용자' 탭의 DM창은 같은 대화를 보여준다.
-// 그래서 한쪽 탭에서 띄운 창을 다른 쪽 탭에서 열면 창이 중복으로 뜨므로,
-// 열기 전에 반대쪽 창이 떠 있는지 확인해 focus만 주고 새 창은 만들지 않는다.
-// (떠 있는 창은 메인 버스로 스냅샷을 계속 받고 읽음 신호도 스스로 보내므로
-//  히스토리 재요청·읽음 처리 같은 추가 작업은 필요 없다)
-
-// 웹: 이미 떠 있는 팝업에 focus만 준다 (안 떠 있으면 false → 새 창 생성으로 진행)
-const focusBrowserChild = (child: Window | null | undefined): boolean => {
-  if (!child || child.closed) return false;
-  child.focus();
-  return true;
-};
-
-// '사용자' 탭에서 peer 의 1:1을 열 때, 그 대话的 1:1 방창이 떠 있으면 focus만 준다
-const focusBrowserRoomWindowOfPeer = (peer: string): boolean => {
-  const roomId = findOneToOneRoomId(peer);
-  if (roomId === null) return false;
-  return focusBrowserChild(roomWindows.value.get(roomId));
-};
-
-// '내 채팅방' 탭에서 1:1 방을 열 때, 그 대화의 DM창이 떠 있으면 focus만 준다
-const focusBrowserChatWindowOfRoom = (roomId: number): boolean => {
-  const peer = oneToOnePeerOfRoom(roomId);
-  if (!peer) return false;
-  return focusBrowserChild(chatWindows.value.get(peer));
-};
-
-// Tauri: 라벨로 이미 떠 있는 OS 윈도우를 찾아 show + focus만 준다 (없으면 false)
-const focusTauriWindowByLabel = async (
-  Ctor: typeof WebviewWindow,
-  label: string,
-): Promise<boolean> => {
-  try {
-    const win = await Ctor.getByLabel(label);
-    if (!win) return false;
-    await win.show().catch(() => undefined);
-    await win.setFocus().catch(() => undefined);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const focusTauriRoomWindowOfPeer = (
-  Ctor: typeof WebviewWindow,
-  peer: string,
-): Promise<boolean> => {
-  const roomId = findOneToOneRoomId(peer);
-  if (roomId === null) return Promise.resolve(false);
-  return focusTauriWindowByLabel(Ctor, roomWindowLabel(roomId));
-};
-
-const focusTauriChatWindowOfRoom = (
-  Ctor: typeof WebviewWindow,
-  roomId: number,
-): Promise<boolean> => {
-  const peer = oneToOnePeerOfRoom(roomId);
-  if (!peer) return Promise.resolve(false);
-  return focusTauriWindowByLabel(Ctor, chatWindowLabel(peer));
-};
-
-// reuseDmWindow: 같은 대화가 '사용자' 탭의 DM창으로 떠 있으면 그 창에 focus만 줄지.
-// 방 만들기로 막 만들어진 새 방은 기존 1:1방과 다른 방이므로 false로 새 창을 연다.
-const openBrowserRoomWindow = (roomId: number, focusExisting: boolean, reuseDmWindow: boolean) => {
-  // 같은 대화가 '사용자' 탭에서 띄운 DM창으로 이미 떠 있으면 새 방창을 띄우지 않고 focus만 준다
-  if (reuseDmWindow && focusBrowserChatWindowOfRoom(roomId)) return;
+const openBrowserRoomWindow = (roomId: number, focusExisting: boolean) => {
   const existing = roomWindows.value.get(roomId);
   if (existing && !existing.closed) {
     if (focusExisting) existing.focus();
@@ -310,6 +126,7 @@ const openBrowserRoomWindow = (roomId: number, focusExisting: boolean, reuseDmWi
   if (child) {
     roomWindows.value.set(roomId, child);
   } else if (focusExisting) {
+    // 팝업 차단 시 "사용자가 직접 누른 경우"에만 같은 탭 라우팅으로 대체한다.
     routerPushRoom(roomId);
   }
   clearRoomUnread(roomId);
@@ -327,10 +144,7 @@ const openTauriRoomWindowWith = async (
   Ctor: typeof WebviewWindow,
   roomId: number,
   focusExisting: boolean,
-  reuseDmWindow: boolean,
 ) => {
-  // 같은 대화가 '사용자' 탭에서 띄운 DM창으로 이미 떠 있으면 새 방창을 띄우지 않고 focus만 준다
-  if (reuseDmWindow && (await focusTauriChatWindowOfRoom(Ctor, roomId))) return;
   const label = roomWindowLabel(roomId);
   const existing = await Ctor.getByLabel(label);
   if (existing) {
@@ -341,6 +155,7 @@ const openTauriRoomWindowWith = async (
     requestRoomHistory(roomId);
     return;
   }
+
   const child = new Ctor(label, {
     url: `#/room/${roomId}?mainId=${encodeURIComponent(mainId)}`,
     title: (() => {
@@ -370,14 +185,15 @@ const openTauriRoomWindowWith = async (
 
 // reuseDmWindow: 같은 대화가 '사용자' 탭의 DM창으로 떠 있으면 그 창에 focus만 줄지.
 // 방 만들기로 막 만들어진 새 방은 기존 1:1방과 다른 방이므로 false로 새 창을 연다.
-const openRoomWindow = (roomId: number, focusExisting = false, reuseDmWindow = true) => {
+// 방 창을 연다 (1:1 대화도 이 함수를 쓴다)
+const openRoomWindow = (roomId: number, focusExisting = false) => {
   if (!roomId) return;
   clearWindowError();
   if (!isTauriRuntime()) {
-    openBrowserRoomWindow(roomId, focusExisting, reuseDmWindow);
+    openBrowserRoomWindow(roomId, focusExisting);
     return;
   }
-  void openTauriRoomWindowWith(WebviewWindow, roomId, focusExisting, reuseDmWindow).catch(
+  void openTauriRoomWindowWith(WebviewWindow, roomId, focusExisting).catch(
     (e: unknown) => {
       const detail = e instanceof Error ? e.message : String(e);
       showWindowError(`채팅방 창 열기 실패: ${detail}`);
@@ -418,50 +234,24 @@ const syncTauriRoomTitles = () => {
   });
 };
 
-// 더블클릭 시 새 윈도우 창으로 1:1 채팅방을 연다.
-// 이미 열려 있으면 새로 열지 않고, 명시적 더블클릭일 때만 포커스를 준다.
-const openChatWindow = (peer: string, focusExisting = false) => {
-  if (!peer) return;
-  clearWindowError();
-  if (!isTauriRuntime()) {
-    // 웹 브라우저: 사용자 제스처(더블클릭) 안에서 동기로 window.open 해야
-    // 팝업 차단을 피할 수 있다. (Tauri API는 절대 건드리지 않는다)
-    openBrowserChatWindow(peer, focusExisting);
+// '사용자' 탭에서 상대를 눌러 1:1 창을 연다.
+// 1:1도 방 하나이므로 같은 방식으로 처리한다:
+//   이미 만들어진 방이 있으면 곧바로 열고, 없으면 서버에 방을 만들어 달라고 요청한다.
+// (메시지 0개인 1:1방은 '내 채팅방' 목록에서 숨기므로 빈 방이 눈에 보이지 않는다)
+const handleOpenChat = (user: string) => {
+  if (!user) return;
+  const existing = findOneToOneRoomId(user);
+  if (existing !== null) {
+    openRoomWindow(existing, true);
     return;
   }
-  // Tauri: OS 네이티브 자식 윈도우(WebviewWindow)로 연다.
-  // (이 모듈은 실제 호출 시점에만 IPC를 쓰므로 정적 import여도 브라우저에서 안전하다)
-  void openTauriChatWindowWith(WebviewWindow, peer, focusExisting).catch(
-    (e: unknown) => {
-      const detail = e instanceof Error ? e.message : String(e);
-      console.error("[vibe-talk] Tauri 채팅 윈도우 열기 실패:", detail);
-      showWindowError(`채팅창 열기 실패(WebviewWindow): ${detail}`);
-      // 마지막 대안: 같은 창에서 채팅방으로 라우팅 (소켓은 유지됨)
-      routerPushChat(peer);
-    },
-  );
-};
-
-// 특정 상대 채팅창에 최신 스냅샷을 내려보낸다 (단일 소스: 메인 창 소켓 상태)
-const broadcastPeer = (peer: string) => {
-  if (!bus) return;
-  bus.post({
-    kind: "chat-state",
-    peer,
-    myNickname: nickname.value,
-    messages: [...(dmMessages.value[peer] ?? [])],
-    connectionStatus: connectionStatus.value,
-    isConnected: isConnected.value,
-    mainId,
-  });
-};
-
-const broadcastAll = () => {
-  openPeers.forEach((peer) => broadcastPeer(peer));
-};
-
-const handleOpenChat = (user: string) => {
-  openChatWindow(user, true);
+  void requestOneToOneRoom(user)
+    .then((roomId) => {
+      if (roomId !== null) openRoomWindow(roomId, true);
+    })
+    .catch(() => {
+      // 실패해도 창을 열지 않는다 (안 읽은 방이 생기지 않도록)
+    });
 };
 
 const handleNicknameSubmit = (value: string) => {
@@ -478,15 +268,8 @@ watch(joinError, (msg) => {
   if (msg) entered.value = false;
 });
 
-const closeAllChatWindows = () => {
-  chatWindows.value.forEach((child) => {
-    try {
-      child?.close();
-    } catch {
-      // 무시
-    }
-  });
-  chatWindows.value.clear();
+// 로그아웃 시 열려 있던 채팅방 창들을 모두 닫는다
+const closeAllRoomWindows = () => {
   roomWindows.value.forEach((child) => {
     try {
       child?.close();
@@ -495,14 +278,6 @@ const closeAllChatWindows = () => {
     }
   });
   roomWindows.value.clear();
-  tauriChatWindows.forEach((child) => {
-    try {
-      void child.close().catch(() => undefined);
-    } catch {
-      // 무시
-    }
-  });
-  tauriChatWindows.clear();
   tauriRoomWindows.forEach((child) => {
     try {
       void child.close().catch(() => undefined);
@@ -511,7 +286,6 @@ const closeAllChatWindows = () => {
     }
   });
   tauriRoomWindows.clear();
-  openPeers.clear();
   openRooms.clear();
   // Tauri 채팅 윈도우는 라벨로 직접 찾아 닫는다 (핸들 누락 대비)
   if (isTauriRuntime()) {
@@ -520,7 +294,7 @@ const closeAllChatWindows = () => {
         const wins = await WebviewWindow.getAll();
         await Promise.all(
           wins
-            .filter((w) => w.label.startsWith("chat_"))
+            .filter((w) => w.label.startsWith("room_"))
             .map((w) => w.close().catch(() => undefined)),
         );
       } catch {
@@ -538,8 +312,8 @@ const handleLeave = () => {
   }
   disconnect();
   localStorage.removeItem(NICKNAME_STORAGE_KEY);
-  // 열려 있던 1:1 채팅창들을 함께 닫는다
-  closeAllChatWindows();
+  // 열려 있던 채팅방 창들을 함께 닫는다
+  closeAllRoomWindows();
   entered.value = false;
 };
 
@@ -558,39 +332,6 @@ onMounted(() => {
     // 다른 탭(다른 mainId)의 팝업 메시지는 무시 (A탭/B탭 버스 섞임 방지)
     if ("mainId" in msg && msg.mainId !== undefined && msg.mainId !== mainId) return;
     switch (msg.kind) {
-      case "chat-open": {
-        // 채팅창이 열릴 때마다 서버에 DB 최근 10건을 요청한다.
-        // (이미 열려 있던 창의 재알림은 openPeers 추가 시점에 한해 1회만 요청)
-        const firstOpen = !openPeers.has(msg.peer);
-        openPeers.add(msg.peer);
-        clearUnread(msg.peer);
-        broadcastPeer(msg.peer);
-        if (firstOpen) requestDmHistory(msg.peer);
-        break;
-      }
-      case "chat-close":
-        openPeers.delete(msg.peer);
-        forgetPeerFocus(msg.peer);
-        break;
-      // 채팅창 focus/blur 보고 → "보고 있는 중"인 대화는 안읽은 건수를 잡지 않는다.
-      case "chat-focus":
-        setPeerFocus(msg.peer, msg.focused);
-        break;
-      case "chat-send": {
-        // BroadcastChannel + tauri event 양쪽으로 같은 메시지가 올 수 있어 id로 중복 제거
-        const key = dedupeKeyFor(msg);
-        if (key) {
-          if (seenBusMessages.has(key)) break;
-          seenBusMessages.add(key);
-          if (seenBusMessages.size > 200) {
-            const oldest = seenBusMessages.values().next().value as string | undefined;
-            if (oldest) seenBusMessages.delete(oldest);
-          }
-        }
-        sendDm(msg.peer, msg.text);
-        broadcastPeer(msg.peer);
-        break;
-      }
       case "room-open": {
         // 채팅창이 열릴 때마다 서버에 DB 최근 10건을 요청한다.
         const firstOpen = !openRooms.has(msg.roomId);
@@ -687,11 +428,10 @@ onUnmounted(() => {
   bus = null;
 });
 
-// 방/DM/연결 상태가 바뀌면 열려 있는 채팅창들에 스냅샷 브로드캐스트
+// 방/연결 상태가 바뀌면 열려 있는 채팅방 창들에 스냅샷 브로드캐스트
 watch(
-  [dmMessages, roomMessages, roomMembers, connectionStatus, isConnected, nickname, myRooms],
+  [roomMessages, roomMembers, connectionStatus, isConnected, nickname, myRooms],
   () => {
-    broadcastAll();
     broadcastAllRooms();
     syncTauriRoomTitles();
   },
@@ -763,10 +503,6 @@ const handleUpsertUser = (payload: { nickname: string; isDeleted: boolean }) => 
   upsertUser(payload.nickname, payload.isDeleted);
 };
 
-// 새 1:1 DM이 와도 채팅창을 자동으로 띄우지 않는다.
-// (안 읽은 건수는 '사용자' 탭의 배지로 표시되고, 사용자가 더블클릭/메뉴로 직접 연다)
-// ── 번호방과 동일하게 목록에서만 알려주고 창은 띄우지 않는다.
-
 // 내가 만든 방이 목록에 반영되면 자동으로 새 창을 연다
 // (방 만들기 팝업에서 확인을 누른 직후 1회만 동작)
 watch(
@@ -777,10 +513,20 @@ watch(
     // 가장 큰 방 번호 = 방금 생성된 방 (서버는 AUTOINCREMENT 발급)
     const latest = rooms.reduce((a, b) => (a.roomId > b.roomId ? a : b));
     pendingAutoOpen.value = false;
-    // 방 만들기로 막 만든 새 방이므로, 같은 대화의 DM창이 떠 있어도 새 방창을 연다
-    openRoomWindow(latest.roomId, true, false);
+    openRoomWindow(latest.roomId, true);
   },
   { deep: true },
+);
+
+// ─── '내 채팅방' 목록에 보여줄 방 ───
+// 1:1 방은 '사용자' 탭에서 창만 열면 만들어진다. 메시지를 한 번도 안 보낸
+// 1:1 방(메시지 0개)은 목록에 띄우지 않는다 → 빈 방이 사용자에게 보이지 않는다.
+// 그룹방은 "방 만들기"로 일부러 만든 것이므로 메시지가 없어도 표시한다.
+const visibleRooms = computed<RoomInfo[]>(() =>
+  myRooms.value.filter((r) => {
+    if (r.memberCount !== 2) return true;
+    return r.lastMessage != null && String(r.lastMessage).trim() !== "";
+  }),
 );
 
 // 새 방 메시지가 와도 채팅방 창을 자동으로 띄우지 않는다.
@@ -820,7 +566,7 @@ watch(
     </div>
     <div class="tab-row">
       <button :class="{ active: mainTab === 'rooms' }" @click="mainTab = 'rooms'">
-        내 채팅방 ({{ myRooms.length }})
+        내 채팅방 ({{ visibleRooms.length }})
       </button>
       <button :class="{ active: mainTab === 'users' }" @click="mainTab = 'users'">
         사용자 ({{ userlist.length }})
@@ -828,7 +574,7 @@ watch(
     </div>
     <RoomListView
       v-if="mainTab === 'rooms'"
-      :rooms="myRooms"
+      :rooms="visibleRooms"
       :unread="roomUnread"
       :is-connected="isConnected"
       :my-nickname="nickname"

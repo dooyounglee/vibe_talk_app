@@ -5,11 +5,11 @@ import { ROOM_TITLE_INPUT_MAX_LENGTH } from "../types/chat";
 // ─── 모듈 싱글톤 상태 ───
 // 같은 윈도우(JS 컨텍스트) 안에서는 하나의 WebSocket만 유지한다.
 // 실제 소켓 연결은 메인 창(HomeView)에서만 만들고,
-// 새 창으로 열리는 채팅방(ChatRoomView/RoomView)은 이벤트 버스로 주고받는다.
+// 새 창으로 열리는 채팅방(RoomView)은 이벤트 버스로 상태를 받아간다.
+//
+// NOTE: 1:1 대화도 "멤버 2명 방"으로만 표현한다. 별도의 DM 상태/경로는 두지 않는다.
 const isConnected = ref(false);
 const nickname = ref("");
-const dmMessages = ref<Record<string, Array<ChatMessage>>>({});
-const unreadCounts = ref<Record<string, number>>({});
 // userlist: DB 등록 사용자 전체 (탈퇴 제외, 본인 제외) — '사용자' 탭에 표시
 const userlist = ref<Array<string>>([]);
 // onlineUsers: 현재 접속중 닉네임 집합 (초록점/오프라인 구분용)
@@ -33,9 +33,9 @@ const myRooms = ref<Array<RoomInfo>>([]);
 const roomMessages = ref<Record<number, Array<ChatMessage>>>({});
 const roomUnread = ref<Record<number, number>>({});
 const roomMembers = ref<Record<number, Array<string>>>({});
-// DM 대화에 대응하는 1:1 방 번호를 찾는다.
+// 1:1 대화에 대응하는 방 번호를 찾는다.
 // (1:1 방의 displayName은 상대 닉네임이므로 매칭할 수 있다)
-// DM과 1:1 방은 같은 대화를 보여주므로, 읽음 처리 시 양쪽 배지를 함께 정리한다.
+// '사용자' 탭에서 상대를 눌러 이미 만들어진 방으로 바로 열기 위한 조회다.
 const findOneToOneRoomId = (peer: string): number | null => {
   const hit = myRooms.value.find(
     (r) => r.memberCount === 2 && (r.displayName ?? "").trim() === peer,
@@ -43,10 +43,8 @@ const findOneToOneRoomId = (peer: string): number | null => {
   return hit ? hit.roomId : null;
 };
 
-// 위(findOneToOneRoomId)의 역방향: 1:1 방 번호 → 상대 닉네임.
-// DM창과 1:1 방창은 같은 대화의 두 가지 진입점이므로, 한쪽 탭에서 이미 띄운
-// 창을 다른 쪽 탭에서 열 때 중복으로 뜨지 않게 focus만 주기 위해 쓴다.
-// 그룹방(3명 이상)이면 null → 호출한 쪽은 평소대로 새 창을 만든다.
+// findOneToOneRoomId 의 역방향: 1:1 방 번호 → 상대 닉네임.
+// 그룹방(3명 이상)이면 null.
 const oneToOnePeerOfRoom = (roomId: number): string | null => {
   const me = nickname.value.trim();
   // 1순위: 방을 열며 받은 실제 멤버 목록이 있으면 이를 따른다 (가장 정확)
@@ -71,19 +69,18 @@ const oneToOnePeerOfRoom = (roomId: number): string | null => {
 //   unread_clear : 채팅창을 열어 읽음 처리 → 서버에 0으로 저장
 
 // 채팅창 열람 시 서버에 최신 내역을 요청하는 플래그/가드 없이
-// 서버가 내려준 history_dm / history_room은 항상 해당 박스를 덮어쓴다.
+// 서버가 내려준 history_room은 항상 해당 박스를 덮어쓴다.
 // (접속 시 일괄 푸시를 제거하고, 창을 열 때마다 DB에서 최근 10건을 조회해 오기 때문)
 
 // WebSocket 인스턴스 (윈도우당 1개)
 let ws: WebSocket | null = null;
 
 // 읽음 처리를 서버에도 알린다 (다른 PC/브라우저에서 로그인해도 배지가 0으로 유지되도록)
-const sendUnreadClear = (scope: "dm" | "room", target: string | number) => {
-  const t = String(target);
-  if (!t) return;
+const sendUnreadClear = (roomId: number) => {
+  if (!Number.isInteger(roomId)) return;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   try {
-    ws.send(JSON.stringify({ type: "unread_clear", scope, target: t }));
+    ws.send(JSON.stringify({ type: "unread_clear", scope: "room", target: String(roomId) }));
   } catch {
     // 무시 — 서버에 저장되지 않아도 화면 동작에는 문제없음
   }
@@ -94,128 +91,44 @@ const connectionStatus = ref("연결되지 않음");
 const reconnectTimer = ref<ReturnType<typeof setTimeout> | null>(null);
 const isManuallyDisconnected = ref(false);
 
-const ensureDmBox = (peer: string): Array<ChatMessage> => {
-  if (!dmMessages.value[peer]) {
-    dmMessages.value[peer] = [];
-  }
-  return dmMessages.value[peer];
-};
-
-const pushDm = (peer: string, msg: ChatMessage) => {
-  ensureDmBox(peer).push(msg);
-  // 안읽은 건수는 서버(unread_bump/unread_state 신호)가 진실이므로 여기서 건드리지 않는다.
-  // (서버가 들어온 메시지를 이미 카운트해 두었다)
-};
-
 // 읽음 처리: 서버에 0으로 저장한다. (서버 DB가 진실이므로 다른 PC 로그인 시에도 유지)
-// DM은 '내 채팅방' 탭의 1:1 방으로 표시되므로, '사용자' 탭에서 열어도
-// 해당 1:1 방 배지를 함께 지워 어긋남을 막는다.
-const clearUnread = (peer: string) => {
-  if (unreadCounts.value[peer]) {
-    unreadCounts.value[peer] = 0;
-  }
-  const roomId = findOneToOneRoomId(peer);
-  if (roomId !== null && roomUnread.value[roomId]) {
-    roomUnread.value[roomId] = 0;
-  }
-  sendUnreadClear("dm", peer);
-};
-
 const clearRoomUnread = (roomId: number) => {
   if (roomUnread.value[roomId]) {
     roomUnread.value[roomId] = 0;
   }
-  // 1:1 방을 열면 DM 쪽 안읽은 건수도 함께 정리 (서버가 양쪽을 함께 지운다)
-  sendUnreadClear("room", roomId);
+  sendUnreadClear(roomId);
 };
 
-// ─── 포커스 중인 대화 (안읽은 건수를 잡지 않을 대상) ───
+// ─── 포커스 중인 방 (안읽은 건수를 잡지 않을 대상) ───
 // 채팅방 창은 메인 창과 별개 프로세스(윈도우/팝업)이므로, 그 창이 focus되어 있는지
 // 메인 창이 알 수 없다. 채팅창이 useWindowFocus로 감지해 bus로 보고하고,
 // 메인 창(=소켓 소유자)이 아래 상태를 진실로 들고 있다.
 // focus 중에는 unread_bump가 도착해도 건수를 올리지 않고 0으로 되돌린다.
-const focusedPeers = ref<Record<string, boolean>>({});
 const focusedRooms = ref<Record<number, boolean>>({});
 
-const isPeerFocused = (peer: string): boolean =>
-  !!peer && focusedPeers.value[peer] === true;
 const isRoomFocused = (roomId: number): boolean =>
   Number.isInteger(roomId) && focusedRooms.value[roomId] === true;
-
-/**
- * DM은 '사용자' 탭(1:1 채팅창)과 '내 채팅방' 탭(1:1 자동방)이 같은 대화를 가리킨다.
- * 한쪽 창만 focus되어 있어도 다른 쪽 배지는 잡히면 안 되므로,
- * 두 진입점을 하나의 대화로 보고 판정한다.
- */
-const isPeerConversationFocused = (peer: string): boolean => {
-  if (isPeerFocused(peer)) return true;
-  const roomId = findOneToOneRoomId(peer);
-  return roomId !== null && isRoomFocused(roomId);
-};
-const isRoomConversationFocused = (roomId: number): boolean => {
-  if (isRoomFocused(roomId)) return true;
-  const peer = oneToOnePeerOfRoom(roomId);
-  return !!peer && isPeerFocused(peer);
-};
 
 /**
  * 채팅창 focus 상태 변경 반영.
  * focus가 된 순간(되거나 이미 focus 중이면) 안읽은 건수를 즉시 0으로 만든다.
  * = "focus하는 순간 채팅목록 안읽은 건수가 사라진다"
- * 같은 대화의 반대쪽 진입점(1:1 DM ↔ 1:1 방)도 함께 focus로 표시해
- * 어느 창으로 열었든 양쪽 배지가 동시에 사라지게 한다.
+ * 1:1도 방 하나이므로 별도 처리 없이 같은 규칙이 적용된다.
  */
-const setPeerFocus = (peer: string, focused: boolean) => {
-  if (!peer) return;
-  if (!focused) {
-    if (focusedPeers.value[peer]) delete focusedPeers.value[peer];
-    // 같은 대화의 1:1 방 표시도 함께 정리한다 (창이 닫혔으므로 보고 있는 중이 아니다)
-    const roomId = findOneToOneRoomId(peer);
-    if (roomId !== null && focusedRooms.value[roomId]) {
-      delete focusedRooms.value[roomId];
-    }
-    return;
-  }
-  focusedPeers.value[peer] = true;
-  clearUnread(peer);
-  const roomId = findOneToOneRoomId(peer);
-  if (roomId !== null) focusedRooms.value[roomId] = true;
-};
-
 const setRoomFocus = (roomId: number, focused: boolean) => {
   if (!Number.isInteger(roomId)) return;
   if (!focused) {
     if (focusedRooms.value[roomId]) delete focusedRooms.value[roomId];
-    // 같은 대화의 DM 쪽 표시도 함께 정리한다
-    const peer = oneToOnePeerOfRoom(roomId);
-    if (peer && focusedPeers.value[peer]) delete focusedPeers.value[peer];
     return;
   }
   focusedRooms.value[roomId] = true;
   clearRoomUnread(roomId);
-  // 1:1 방이면 같은 대화를 보여주는 DM 쪽도 focus로 표시해 양쪽 배지를 함께 0으로 만든다
-  const peer = oneToOnePeerOfRoom(roomId);
-  if (peer) {
-    focusedPeers.value[peer] = true;
-    clearUnread(peer);
-  }
 };
 
-// 창이 닫혔을 때(chat-close/room-close) 남은 포커스 표시를 정리한다.
-// 같은 대화의 반대쪽 표시까지 정리해 닫힌 창이 "보고 있는 중"으로 남지 않게 한다.
-const forgetPeerFocus = (peer: string) => {
-  if (!peer) return;
-  if (focusedPeers.value[peer]) delete focusedPeers.value[peer];
-  const roomId = findOneToOneRoomId(peer);
-  if (roomId !== null && focusedRooms.value[roomId]) {
-    delete focusedRooms.value[roomId];
-  }
-};
+// 창이 닫혔을 때(room-close) 남은 포커스 표시를 정리한다.
 const forgetRoomFocus = (roomId: number) => {
   if (!Number.isInteger(roomId)) return;
   if (focusedRooms.value[roomId]) delete focusedRooms.value[roomId];
-  const peer = oneToOnePeerOfRoom(roomId);
-  if (peer && focusedPeers.value[peer]) delete focusedPeers.value[peer];
 };
 
 const ensureRoomBox = (roomId: number): Array<ChatMessage> => {
@@ -249,7 +162,7 @@ interface IncomingPayload {
   isDeleted?: boolean;
   is_deleted?: number;
   ok?: boolean;
-  // 채팅창 열람 시 서버가 보내주는 지난 대화 내역 (history_dm / history_room)
+  // 채팅창 열람 시 서버가 보내주는 지난 대화 내역 (history_room)
   withUser?: string;
   messages?: Array<HistoryEntry>;
   // 번호방
@@ -259,7 +172,7 @@ interface IncomingPayload {
   reason?: string;
   timestamp?: number;
   // 안읽은 건수 (서버 DB가 단일 진실 — 다른 PC 로그인 시에도 여기서 복원된다)
-  unread?: { dm: Record<string, number>; room: Record<string, number> };
+  unread?: { room: Record<string, number> };
   scope?: string;
   target?: string;
   // 읽음 표시 (카톡식 메시지별 숫자)
@@ -286,25 +199,27 @@ const readMsgId = (msg?: HistoryEntry): number | undefined => {
   return undefined;
 };
 
+/**
+ * '사용자' 탭에서 1:1 창을 열기 위해 보낸 요청의 대기 콜백.
+ * 서버가 room_opened 로 방 번호를 돌려주면 여기에 걸린 콜백을 깨운다.
+ * (이미 만들어진 방이면 서버가 곧바로 회신하므로 즉시 끝난다)
+ */
+const pendingOneToOne = new Map<string, (roomId: number) => void>();
+
 const handleIncoming = (raw: string) => {
   const data: IncomingPayload = JSON.parse(raw) as IncomingPayload;
-  if (data.type === "dm") {
-    const from = String(data.from ?? data.nickname ?? "");
-    const to = String(data.to ?? "");
-    const fromSelf = from === nickname.value;
-    const peer = fromSelf ? to : from;
+  if (data.type === "room_opened") {
+    // '사용자' 탭에서 1:1 창을 열라고 요청한 뒤 서버가 방 번호를 알려준 경우.
+    // 대기 중인 요청에 방 번호를 넘겨 호출한 곳이 창을 열게 한다.
+    const peer = String(data.withUser ?? "");
     if (!peer) return;
-    const formattedMessage: ChatMessage = {
-      type: "dm",
-      nickname: from,
-      text: String(data.text ?? ""),
-      timestamp:
-        typeof data.timestamp === "number" ? data.timestamp : Date.now(),
-      msgId: typeof data.msgId === "number" ? data.msgId : undefined,
-      unreadCount:
-        typeof data.unreadCount === "number" ? data.unreadCount : 0,
-    };
-    pushDm(peer, formattedMessage);
+    const roomId = Number(data.roomId);
+    if (!Number.isInteger(roomId)) return;
+    const resolve = pendingOneToOne.get(peer);
+    if (resolve) {
+      pendingOneToOne.delete(peer);
+      resolve(roomId);
+    }
   } else if (data.type === "userlist") {
     // users = DB 등록 사용자 전체 (탈퇴 제외), onlineUsers = 현재 접속중
     // 구버전 서버 호환: onlineUsers가 없으면 users를 그대로 접속중으로 간주
@@ -353,22 +268,6 @@ const handleIncoming = (raw: string) => {
         roomId,
       });
     }
-  } else if (data.type === "history_dm") {
-    const withUser = String(data.withUser ?? "");
-    if (!withUser) return;
-    const history: Array<ChatMessage> = (
-      Array.isArray(data.messages) ? data.messages : []
-    ).map((msg) => ({
-      type: "message",
-      nickname: String(msg?.nickname ?? withUser),
-      text: String(msg?.text ?? ""),
-      timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
-      msgId: readMsgId(msg),
-      unreadCount:
-        typeof msg?.unreadCount === "number" ? msg.unreadCount : 0,
-    }));
-    // 채팅창을 열 때마다 서버가 보내는 DB 최신 내역(10건)으로 박스를 덮어쓴다.
-    dmMessages.value[withUser] = history;
   } else if (data.type === "my_rooms" || data.type === "room_created") {
     const rooms = Array.isArray(data.rooms) ? data.rooms : [];
     myRooms.value = rooms
@@ -479,12 +378,7 @@ const handleIncoming = (raw: string) => {
   } else if (data.type === "unread_state") {
     // 접속 시 서버 DB에서 내려온 안읽은 건수 전체를 그대로 적용한다.
     // (로그아웃/다른 PC에서 로그인해도 서버에 남은 값이 복원된다)
-    const dm: Record<string, number> = {};
     const room: Record<number, number> = {};
-    for (const [peer, count] of Object.entries(data.unread?.dm ?? {})) {
-      const n = Number(count);
-      if (peer && Number.isFinite(n) && n > 0) dm[peer] = Math.floor(n);
-    }
     for (const [key, count] of Object.entries(data.unread?.room ?? {})) {
       const id = Number(key);
       const n = Number(count);
@@ -492,44 +386,27 @@ const handleIncoming = (raw: string) => {
         room[id] = Math.floor(n);
       }
     }
-    // 재접속으로 복원되는 값 중 "지금 보고 있는(포커스된) 대화"는 이미 읽은 것으로 본다.
+    // 재접속으로 복원되는 값 중 "지금 보고 있는(포커스된) 방"은 이미 읽은 것으로 본다.
     // 복원 배열에서 먼저 빼고(아래에서 통째로 교체) 서버 DB에도 0으로 되돌린다.
-    Object.keys(dm).forEach((peer) => {
-      if (!isPeerConversationFocused(peer)) return;
-      delete dm[peer];
-      clearUnread(peer);
-    });
     Object.keys(room).forEach((key) => {
       const roomId = Number(key);
-      if (!isRoomConversationFocused(roomId)) return;
+      if (!isRoomFocused(roomId)) return;
       delete room[roomId];
       clearRoomUnread(roomId);
     });
-    unreadCounts.value = dm;
     roomUnread.value = room;
   } else if (data.type === "unread_bump") {
     // 실시간 수신: 서버가 DB에 증가시켜 둔 값을 화면에 +1 반영한다.
-    // 단, 해당 대화가 focus 중이면 "보고 있는 중"이므로 건수를 올리지 않고 0으로 되돌린다.
+    // 단, 해당 방이 focus 중이면 "보고 있는 중"이므로 건수를 올리지 않고 0으로 되돌린다.
     // (서버에 unread_clear를 보내므로 DB도 0이 되어 재접속 시에도 배지가 안 살아난다)
-    if (data.scope === "room") {
-      const roomId = Number(data.target);
-      if (Number.isInteger(roomId) && roomId > 0) {
-        if (isRoomConversationFocused(roomId)) {
-          clearRoomUnread(roomId);
-          return;
-        }
-        roomUnread.value[roomId] = (roomUnread.value[roomId] ?? 0) + 1;
-      }
-    } else {
-      const peer = String(data.target ?? "");
-      if (peer) {
-        if (isPeerConversationFocused(peer)) {
-          clearUnread(peer);
-          return;
-        }
-        unreadCounts.value[peer] = (unreadCounts.value[peer] ?? 0) + 1;
-      }
+    if (data.scope !== "room") return;
+    const roomId = Number(data.target);
+    if (!Number.isInteger(roomId) || roomId <= 0) return;
+    if (isRoomFocused(roomId)) {
+      clearRoomUnread(roomId);
+      return;
     }
+    roomUnread.value[roomId] = (roomUnread.value[roomId] ?? 0) + 1;
   } else if (data.type === "read_ack") {
     // 카톡식 읽음 숫자의 실시간 갱신.
     // 누군가 대화를 읽으면 서버가 그 대화의 최신 커서 맵 + 참여자 목록을 보내고,
@@ -602,49 +479,27 @@ const applyReadAck = (
   rawCursors: unknown,
   rawMembers?: unknown,
 ) => {
-  if (!target) return;
-  const cursors = parseCursors(rawCursors);
-  const me = nickname.value.trim();
-  if (scope === "room") {
-    const roomId = Number(target);
-    if (!Number.isInteger(roomId)) return;
-    const box = roomMessages.value[roomId];
-    if (!box) return;
-    // read_ack 가 실어 온 참여자 목록을 우선 사용한다(항상 최신).
-    // 구버전 서버처럼 목록이 없으면 이미 받아둔 방 멤버 목록으로 폴백한다.
-    const ackMembers = Array.isArray(rawMembers)
-      ? rawMembers.map((m) => String(m))
-      : [];
-    const members = ackMembers.length > 0
-      ? ackMembers
-      : (roomMembers.value[roomId] ?? []);
-    // 참여자 목록을 아예 모르면 재계산하지 않고 기존 숫자를 유지한다.
-    if (members.length === 0) return;
-    box.forEach((m) => {
-      // 내 메시지뿐 아니라 상대 메시지(message-other)도 갱신한다.
-      // (상대 메시지 옆 숫자가 실시간으로 줄어들어야 한다)
-      const next = countUnread(cursors, members, m.nickname, m.msgId);
-      if (next === null) return; // id 모르면 기존 값 유지
-      m.unreadCount = next;
-    });
-    return;
-  }
-  // dm: target 은 서버가 정규화한 대화 키("A|B"). DM 창 박스를 찾아 갱신한다.
-  const key = target.split("|");
-  const peer = key.find((n) => n && n.trim() !== me) ?? "";
-  if (!peer) return;
-  const box = dmMessages.value[peer];
+  if (scope !== "room" || !target) return;
+  const roomId = Number(target);
+  if (!Number.isInteger(roomId)) return;
+  const box = roomMessages.value[roomId];
   if (!box) return;
-  // 1:1 은 대화 키의 두 사람이 곧 참여자다 (read_ack.members 가 오면 그 값을 우선).
-  const dmMembers = Array.isArray(rawMembers)
+  const cursors = parseCursors(rawCursors);
+  // read_ack 가 실어 온 참여자 목록을 우선 사용한다(항상 최신).
+  // 구버전 서버처럼 목록이 없으면 이미 받아둔 방 멤버 목록으로 폴백한다.
+  const ackMembers = Array.isArray(rawMembers)
     ? rawMembers.map((m) => String(m))
     : [];
-  const members = dmMembers.length > 0 ? dmMembers : key;
+  const members = ackMembers.length > 0
+    ? ackMembers
+    : (roomMembers.value[roomId] ?? []);
+  // 참여자 목록을 아예 모르면 재계산하지 않고 기존 숫자를 유지한다.
   if (members.length === 0) return;
   box.forEach((m) => {
-    // DM 박스도 상대 메시지까지 함께 갱신한다.
+    // 내 메시지뿐 아니라 상대 메시지(message-other)도 갱신한다.
+    // (상대 메시지 옆 숫자가 실시간으로 줄어들어야 한다)
     const next = countUnread(cursors, members, m.nickname, m.msgId);
-    if (next === null) return;
+    if (next === null) return; // id 모르면 기존 값 유지
     m.unreadCount = next;
   });
 };
@@ -676,15 +531,35 @@ const attachHandlers = (socket: WebSocket) => {
   };
 };
 
-// 1:1 메시지 전송 (메인 창의 단일 소켓으로 전송; 내 발신분은 서버 에코로 수신된다)
-const sendDm = (to: string, text: string): boolean => {
-  const trimmed = text.trim();
-  if (trimmed === "" || !to) return false;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-  ws.send(
-    JSON.stringify({ type: "dm", to, nickname: nickname.value, text: trimmed }),
-  );
-  return true;
+/**
+ * '사용자' 탭에서 상대를 눌러 1:1 창을 열기 위한 요청.
+ * 서버가 "있다면 그대로, 없으면 생성"으로 방을 확보한 뒤 방 번호를 돌려준다.
+ * 실패/응답 없음 시 null 을 돌려주고 호출부가 창을 열지 않는다.
+ */
+const requestOneToOneRoom = (peer: string): Promise<number | null> => {
+  const target = peer.trim();
+  if (!target) return Promise.resolve(null);
+  const socket = ws;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return Promise.resolve(null);
+  // 같은 상대를 연속으로 누른 경우 먼저 걸린 요청은 무시한다(창이 2개 뜨지 않도록)
+  pendingOneToOne.delete(target);
+  return new Promise<number | null>((resolve) => {
+    const timer = setTimeout(() => {
+      pendingOneToOne.delete(target);
+      resolve(null);
+    }, 5000);
+    pendingOneToOne.set(target, (roomId) => {
+      clearTimeout(timer);
+      resolve(roomId);
+    });
+    try {
+      socket.send(JSON.stringify({ type: "dm_room_open", withUser: target }));
+    } catch {
+      clearTimeout(timer);
+      pendingOneToOne.delete(target);
+      resolve(null);
+    }
+  });
 };
 
 // 번호방 액션 (메인 창의 단일 소켓으로 전송)
@@ -757,16 +632,8 @@ const sendRoom = (roomId: number, text: string): boolean => {
 };
 
 // ─── 채팅창 열람: DB 최근 10건 조회 요청 ───
-// 채팅창(1:1/단체)이 열릴 때마다 호출하며, 서버는 history_dm / history_room으로
-// 최근 10건을 내려준다 (수신 시 해당 박스를 덮어쓴다).
-const requestDmHistory = (peer: string): boolean => {
-  const target = peer.trim();
-  if (!target) return false;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-  ws.send(JSON.stringify({ type: "dm_history", withUser: target }));
-  return true;
-};
-
+// 채팅창이 열릴 때마다 호출하며, 서버는 history_room으로 최근 10건을 내려준다
+// (수신 시 해당 박스를 덮어쓴다). 1:1도 방이므로 같은 경로를 쓴다.
 const requestRoomHistory = (roomId: number): boolean => {
   if (!Number.isInteger(roomId) || roomId <= 0) return false;
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
@@ -819,8 +686,6 @@ const connect = (nicknameInput: string): boolean => {
   const nicknameChanged = nickname.value !== "" && nickname.value !== trimmed;
   nickname.value = trimmed;
   if (nicknameChanged) {
-    dmMessages.value = {};
-    unreadCounts.value = {};
     myRooms.value = [];
     roomMessages.value = {};
     roomUnread.value = {};
@@ -829,7 +694,6 @@ const connect = (nicknameInput: string): boolean => {
   // 안읽은 건수는 서버 DB가 진실이므로 여기서 복원하지 않는다.
   // join 응답의 unread_state로 서버 값이 도착하면 그때 적용된다.
   // (닉네임이 바뀌면 이전 사용자의 배지를 먼저 비워야 새 계정과 섞이지 않는다)
-  unreadCounts.value = {};
   roomUnread.value = {};
   // 새 접속에서는 채팅창을 열 때마다 다시 조회한다.
   isManuallyDisconnected.value = false;
@@ -904,14 +768,12 @@ const disconnect = () => {
   connectionStatus.value = "연결 끊김";
   // 로그아웃. 안읽은 건수는 서버 DB에 이미 저장돼 있으므로(읽음은 unread_clear로 보고됨)
   // 여기서는 화면 상태만 비운다. 다시 로그인하면 join 응답의 unread_state로 복원된다.
-  dmMessages.value = {};
-  unreadCounts.value = {};
+  pendingOneToOne.clear();
   myRooms.value = [];
   roomMessages.value = {};
   roomUnread.value = {};
   roomMembers.value = {};
-  // 창들이 모두 닫히므로 "보고 있는 대화" 상태도 비운다.
-  focusedPeers.value = {};
+  // 창들이 모두 닫히므로 "보고 있는 방" 상태도 비운다.
   focusedRooms.value = {};
 };
 
@@ -925,8 +787,6 @@ export function useChatSocket() {
     nickname,
     isConnected,
     connectionStatus,
-    dmMessages,
-    unreadCounts,
     userlist,
     onlineUsers,
     usersDetail,
@@ -941,22 +801,14 @@ export function useChatSocket() {
     findOneToOneRoomId,
     oneToOnePeerOfRoom,
     // 채팅창 focus 상태 (안읽은 건수를 잡지 않을 대상 판정용)
-    focusedPeers,
     focusedRooms,
-    isPeerFocused,
     isRoomFocused,
-    isPeerConversationFocused,
-    isRoomConversationFocused,
-    setPeerFocus,
     setRoomFocus,
-    forgetPeerFocus,
     forgetRoomFocus,
     connect,
     attemptReconnect,
     manualReconnect,
     disconnect,
-    sendDm,
-    clearUnread,
     clearRoomUnread,
     createRoom: createRoomAction,
     joinRoom,
@@ -965,7 +817,7 @@ export function useChatSocket() {
     refreshRooms,
     renameRoom,
     sendRoom,
-    requestDmHistory,
+    requestOneToOneRoom,
     requestRoomHistory,
     upsertUser,
   };

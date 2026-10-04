@@ -2,24 +2,18 @@ import { emit, listen } from "@tauri-apps/api/event";
 import type { ChatMessage } from "./types/chat";
 
 /**
- * 메인 창 ↔ 1:1 채팅창 간 이벤트 버스.
+ * 메인 창 ↔ 채팅방 창 간 이벤트 버스.
  *
  * - WebSocket은 메인 창(HomeView)에만 존재한다.
- * - 채팅창(ChatRoomView)은 소켓을 만들지 않고, 이 버스로
+ * - 채팅방 창(RoomView)은 소켓을 만들지 않고, 이 버스로
  *   상태 스냅샷을 받아서 표시하고 전송 요청을 메인 창에 전달한다.
  * - 웹 브라우저: 같은 origin 팝업(window.open)끼리 BroadcastChannel로 통신.
  * - Tauri: webview 윈도우(WebviewWindow + tauri event)로 통신.
+ *
+ * NOTE: 1:1 대화도 방 창 하나이므로 peer 기준 신호는 더 이상 없다.
  */
 
 export const CHAT_BUS_NAME = "vibe-talk-bus";
-
-export interface ChatStatePayload {
-  peer: string;
-  myNickname: string;
-  messages: ChatMessage[];
-  connectionStatus: string;
-  isConnected: boolean;
-}
 
 export interface RoomStatePayload {
   roomId: number;
@@ -32,13 +26,7 @@ export interface RoomStatePayload {
 }
 
 export type ChatBusMessage =
-  // 1:1 채팅창 → 메인
-  | { kind: "chat-open"; peer: string; mainId?: string }
-  | { kind: "chat-close"; peer: string; mainId?: string }
-  | { kind: "chat-focus"; peer: string; focused: boolean; mainId?: string }
-  // NOTE: 'chat-read' 는 focus 기반 읽음 처리로 대체되어 더 이상 쓰지 않는다.
-  | { kind: "chat-send"; peer: string; text: string; id: string; mainId?: string }
-  // 번호방 채팅창 → 메인
+  // 번호방 채팅창 → 메인 (1:1도 이 경로를 쓴다)
   | { kind: "room-open"; roomId: number; mainId?: string }
   | { kind: "room-close"; roomId: number; mainId?: string }
   | { kind: "room-focus"; roomId: number; focused: boolean; mainId?: string }
@@ -47,7 +35,6 @@ export type ChatBusMessage =
   // 번호방 채팅창 → 메인: 방제목 수정 요청 (소켓은 메인 창에만 있으므로 경유)
   | { kind: "room-rename"; roomId: number; title: string; mainId?: string }
   // 메인 → 채팅창
-  | ({ kind: "chat-state" } & ChatStatePayload & { mainId?: string })
   | ({ kind: "room-state" } & RoomStatePayload & { mainId?: string })
   | { kind: "main-ready"; mainId?: string }
   | { kind: "main-closing"; mainId?: string };
@@ -101,7 +88,6 @@ export function createChatBusHub(): ChatBus & { add: (bus: ChatBus | null) => vo
 }
 
 export function dedupeKeyFor(msg: ChatBusMessage): string | null {
-  if (msg.kind === "chat-send") return `send:${msg.id}`;
   if (msg.kind === "room-send") return `room-send:${msg.id}`;
   return null;
 }
@@ -218,17 +204,5 @@ function currentChatRoomIdFromUrl(): number | null {
 /** 현재 라우트가 번호방(#/room/3)인지. Tauri 채팅 윈도우 판별용 */
 export function currentRoomIdFromUrl(): number | null {
   return currentChatRoomIdFromUrl();
-}
-
-/** 현재 라우트가 1:1 채팅방(#/chat/...)인지 */
-export function currentChatPeerFromUrl(): string | null {
-  try {
-    const hash = currentHash();
-    const match = hash.match(/^#\/chat\/([^?#]+)/);
-    if (!match) return null;
-    return decodeURIComponent(match[1] ?? "");
-  } catch {
-    return null;
-  }
 }
 
