@@ -6,7 +6,6 @@ const props = defineProps<{
   myNickname: string;
   users: string[];
   onlineUsers: string[];
-  unreadCounts: Record<string, number>;
   connectionStatus: string;
   isConnected: boolean;
   isAdmin: boolean;
@@ -27,6 +26,12 @@ const displayUsers = computed(() => {
   if (props.isAdmin) return props.usersDetail;
   return props.users.map((nickname) => ({ nickname, isDeleted: false }));
 });
+
+// 목록 정렬: 닉네임 오름차순 고정.
+// (최근 대화 여부와 무관하게 항상 이름순으로 같은 순서를 유지한다)
+const sortedUsers = computed(() =>
+  [...displayUsers.value].sort((a, b) => a.nickname.localeCompare(b.nickname)),
+);
 
 // 우클릭/더보기 메뉴 상태 (어느 사용자에 대한 메뉴인지)
 const menuUser = ref<string | null>(null);
@@ -106,14 +111,14 @@ const confirmUserModal = () => {
 
 <template>
   <div class="userlist-screen" @click="closeMenu">
-    <h2 class="list-title">사용자 목록 ({{ displayUsers.length }}명)
+    <h2 class="list-title">사용자 목록 ({{ sortedUsers.length }}명)
       <button v-if="isAdmin" class="small-btn primary add-btn" @click="openAddModal">추가</button>
     </h2>
     <p v-if="upsertResult" class="error">{{ upsertResult }}</p>
-    <p v-if="displayUsers.length === 0" class="empty">등록된 다른 사용자가 없습니다.</p>
+    <p v-if="sortedUsers.length === 0" class="empty">등록된 다른 사용자가 없습니다.</p>
     <ul class="user-list">
       <li
-        v-for="u in displayUsers"
+        v-for="u in sortedUsers"
         :key="u.nickname"
         class="user-item"
         :class="{ withdrawn: u.isDeleted }"
@@ -129,9 +134,6 @@ const confirmUserModal = () => {
           :class="onlineUsers.includes(u.nickname) ? 'online' : 'offline'"
           :title="onlineUsers.includes(u.nickname) ? '접속중' : '오프라인'"
         ></span>
-        <span v-if="(unreadCounts[u.nickname] ?? 0) > 0" class="badge">
-          {{ unreadCounts[u.nickname] }}
-        </span>
         <button
           v-if="isAdmin"
           class="edit-btn"
@@ -254,18 +256,6 @@ const confirmUserModal = () => {
   flex: 1;
   font-size: 15px;
   word-break: break-all;
-}
-.badge {
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 10px;
-  background: #dc3545;
-  color: #fff;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 .presence {
   width: 10px;

@@ -30,6 +30,22 @@ const myRooms = ref<Array<RoomInfo>>([]);
 const roomMessages = ref<Record<number, Array<ChatMessage>>>({});
 const roomUnread = ref<Record<number, number>>({});
 const roomMembers = ref<Record<number, Array<string>>>({});
+// DM 대화에 대응하는 1:1 방 번호를 찾는다.
+// (1:1 방의 displayName은 상대 닉네임이므로 매칭할 수 있다)
+// DM과 1:1 방은 같은 대화를 보여주므로, 읽음 처리 시 양쪽 배지를 함께 정리한다.
+const findOneToOneRoomId = (peer: string): number | null => {
+  const hit = myRooms.value.find(
+    (r) => r.memberCount === 2 && (r.displayName ?? "").trim() === peer,
+  );
+  return hit ? hit.roomId : null;
+};
+
+// ─── 안읽은 건수: 서버 DB가 단일 진실 ───
+// localStorage는 브라우저(PC)별이라 다른 기기에서 로그인하면 안읽은 건수가 사라진다.
+// 그래서 서버 unread 테이블이 진실이고, 클라이언트는 아래 신호로만 배지를 갱신한다.
+//   unread_state : 접속 시 전체 안읽은 건수 복원 (다른 PC 로그인 시에도 유지됨)
+//   unread_bump  : 실시간 수신 시 +1
+//   unread_clear : 채팅창을 열어 읽음 처리 → 서버에 0으로 저장
 
 // 채팅창 열람 시 서버에 최신 내역을 요청하는 플래그/가드 없이
 // 서버가 내려준 history_dm / history_room은 항상 해당 박스를 덮어쓴다.
@@ -37,6 +53,18 @@ const roomMembers = ref<Record<number, Array<string>>>({});
 
 // WebSocket 인스턴스 (윈도우당 1개)
 let ws: WebSocket | null = null;
+
+// 읽음 처리를 서버에도 알린다 (다른 PC/브라우저에서 로그인해도 배지가 0으로 유지되도록)
+const sendUnreadClear = (scope: "dm" | "room", target: string | number) => {
+  const t = String(target);
+  if (!t) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  try {
+    ws.send(JSON.stringify({ type: "unread_clear", scope, target: t }));
+  } catch {
+    // 무시 — 서버에 저장되지 않아도 화면 동작에는 문제없음
+  }
+};
 
 // 재연결 관련 상태
 const connectionStatus = ref("연결되지 않음");
@@ -50,23 +78,32 @@ const ensureDmBox = (peer: string): Array<ChatMessage> => {
   return dmMessages.value[peer];
 };
 
-const pushDm = (peer: string, msg: ChatMessage, fromSelf: boolean) => {
+const pushDm = (peer: string, msg: ChatMessage) => {
   ensureDmBox(peer).push(msg);
-  if (!fromSelf) {
-    unreadCounts.value[peer] = (unreadCounts.value[peer] ?? 0) + 1;
-  }
+  // 안읽은 건수는 서버(unread_bump/unread_state 신호)가 진실이므로 여기서 건드리지 않는다.
+  // (서버가 들어온 메시지를 이미 카운트해 두었다)
 };
 
+// 읽음 처리: 서버에 0으로 저장한다. (서버 DB가 진실이므로 다른 PC 로그인 시에도 유지)
+// DM은 '내 채팅방' 탭의 1:1 방으로 표시되므로, '사용자' 탭에서 열어도
+// 해당 1:1 방 배지를 함께 지워 어긋남을 막는다.
 const clearUnread = (peer: string) => {
   if (unreadCounts.value[peer]) {
     unreadCounts.value[peer] = 0;
   }
+  const roomId = findOneToOneRoomId(peer);
+  if (roomId !== null && roomUnread.value[roomId]) {
+    roomUnread.value[roomId] = 0;
+  }
+  sendUnreadClear("dm", peer);
 };
 
 const clearRoomUnread = (roomId: number) => {
   if (roomUnread.value[roomId]) {
     roomUnread.value[roomId] = 0;
   }
+  // 1:1 방을 열면 DM 쪽 안읽은 건수도 함께 정리 (서버가 양쪽을 함께 지운다)
+  sendUnreadClear("room", roomId);
 };
 
 const ensureRoomBox = (roomId: number): Array<ChatMessage> => {
@@ -103,6 +140,10 @@ interface IncomingPayload {
   members?: Array<string>;
   reason?: string;
   timestamp?: number;
+  // 안읽은 건수 (서버 DB가 단일 진실 — 다른 PC 로그인 시에도 여기서 복원된다)
+  unread?: { dm: Record<string, number>; room: Record<string, number> };
+  scope?: string;
+  target?: string;
 }
 
 const pruneRooms = () => {
@@ -127,8 +168,10 @@ const handleIncoming = (raw: string) => {
       type: "dm",
       nickname: from,
       text: String(data.text ?? ""),
+      timestamp:
+        typeof data.timestamp === "number" ? data.timestamp : Date.now(),
     };
-    pushDm(peer, formattedMessage, fromSelf);
+    pushDm(peer, formattedMessage);
   } else if (data.type === "userlist") {
     // users = DB 등록 사용자 전체 (탈퇴 제외), onlineUsers = 현재 접속중
     // 구버전 서버 호환: onlineUsers가 없으면 users를 그대로 접속중으로 간주
@@ -233,7 +276,6 @@ const handleIncoming = (raw: string) => {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
     const from = String(data.from ?? data.nickname ?? "");
-    const isSelf = from === nickname.value;
     const msg: ChatMessage = {
       type: "room",
       nickname: from,
@@ -242,9 +284,7 @@ const handleIncoming = (raw: string) => {
       roomId,
     };
     ensureRoomBox(roomId).push(msg);
-    if (!isSelf) {
-      roomUnread.value[roomId] = (roomUnread.value[roomId] ?? 0) + 1;
-    }
+    // 안읽은 건수는 서버 신호(unread_bump)가 진실이므로 여기서 증가시키지 않는다.
     // '내 채팅방' 목록 미리보기/시간 즉시 갱신 (다음 my_rooms 수신 때 DB 값으로 재확정)
     const room = myRooms.value.find((r) => r.roomId === roomId);
     if (room) {
@@ -279,6 +319,37 @@ const handleIncoming = (raw: string) => {
     // 실패 사유는 화면에서 system 메시지로 노출한다 (HomeView에서 처리)
     const roomId = Number(data.roomId);
     void roomId;
+  } else if (data.type === "unread_state") {
+    // 접속 시 서버 DB에서 내려온 안읽은 건수 전체를 그대로 적용한다.
+    // (로그아웃/다른 PC에서 로그인해도 서버에 남은 값이 복원된다)
+    const dm: Record<string, number> = {};
+    const room: Record<number, number> = {};
+    for (const [peer, count] of Object.entries(data.unread?.dm ?? {})) {
+      const n = Number(count);
+      if (peer && Number.isFinite(n) && n > 0) dm[peer] = Math.floor(n);
+    }
+    for (const [key, count] of Object.entries(data.unread?.room ?? {})) {
+      const id = Number(key);
+      const n = Number(count);
+      if (Number.isInteger(id) && id > 0 && Number.isFinite(n) && n > 0) {
+        room[id] = Math.floor(n);
+      }
+    }
+    unreadCounts.value = dm;
+    roomUnread.value = room;
+  } else if (data.type === "unread_bump") {
+    // 실시간 수신: 서버가 DB에 증가시켜 둔 값을 화면에 +1 반영한다.
+    if (data.scope === "room") {
+      const roomId = Number(data.target);
+      if (Number.isInteger(roomId) && roomId > 0) {
+        roomUnread.value[roomId] = (roomUnread.value[roomId] ?? 0) + 1;
+      }
+    } else {
+      const peer = String(data.target ?? "");
+      if (peer) {
+        unreadCounts.value[peer] = (unreadCounts.value[peer] ?? 0) + 1;
+      }
+    }
   }
 };
 
@@ -446,6 +517,11 @@ const connect = (nicknameInput: string): boolean => {
     roomUnread.value = {};
     roomMembers.value = {};
   }
+  // 안읽은 건수는 서버 DB가 진실이므로 여기서 복원하지 않는다.
+  // join 응답의 unread_state로 서버 값이 도착하면 그때 적용된다.
+  // (닉네임이 바뀌면 이전 사용자의 배지를 먼저 비워야 새 계정과 섞이지 않는다)
+  unreadCounts.value = {};
+  roomUnread.value = {};
   // 새 접속에서는 채팅창을 열 때마다 다시 조회한다.
   isManuallyDisconnected.value = false;
   if (reconnectTimer.value) {
@@ -517,7 +593,8 @@ const disconnect = () => {
   ws = null;
   isConnected.value = false;
   connectionStatus.value = "연결 끊김";
-  // 명시적 나가기이므로 대화 상태도 함께 정리
+  // 로그아웃. 안읽은 건수는 서버 DB에 이미 저장돼 있으므로(읽음은 unread_clear로 보고됨)
+  // 여기서는 화면 상태만 비운다. 다시 로그인하면 join 응답의 unread_state로 복원된다.
   dmMessages.value = {};
   unreadCounts.value = {};
   myRooms.value = [];

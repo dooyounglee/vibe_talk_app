@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import type { RoomInfo } from "../types/chat";
 import {
   formatRoomTime,
@@ -24,6 +24,18 @@ const emit = defineEmits<{
 
 // '내 채팅방 (n개)' 우측 더보기 메뉴 상태
 const showMenu = ref(false);
+
+// 목록 정렬: 마지막 대화(마지막 메시지 시각)가 가장 최근인 방을 맨 위로.
+// 메시지가 한 번도 없던 방(null)은 아래로 내려가고, 시각이 같으면 방 번호 내림차순으로
+// 최신 방이 위로 온다. (원본 배열은 건드리지 않아 정렬이 불필요할 때 재계산을 피한다)
+const sortedRooms = computed<RoomInfo[]>(() =>
+  [...props.rooms].sort((a, b) => {
+    const at = typeof a.lastMessageAt === "number" ? a.lastMessageAt : 0;
+    const bt = typeof b.lastMessageAt === "number" ? b.lastMessageAt : 0;
+    if (at !== bt) return bt - at;
+    return b.roomId - a.roomId;
+  }),
+);
 
 const toggleMenu = (e: MouseEvent) => {
   e.stopPropagation();
@@ -135,9 +147,10 @@ onBeforeUnmount(() => {
     <p v-if="rooms.length === 0" class="empty">속한 방이 없습니다. 방을 만드세요.</p>
     <ul class="room-list">
       <li
-        v-for="room in rooms"
+        v-for="room in sortedRooms"
         :key="room.roomId"
         class="room-item"
+        :class="{ unread: (unread[room.roomId] ?? 0) > 0 }"
         @dblclick="$emit('open-room', room.roomId)"
         @contextmenu.prevent="openRoomMenuFromContext(room.roomId, $event)"
       >
@@ -176,7 +189,9 @@ onBeforeUnmount(() => {
       <button class="danger" @click="runRoomAction(ctxRoomId, 'leave-room')">나가기</button>
     </div>
 
-    <p class="hint">더블클릭 또는 ⋮ 메뉴(우클릭)로 새 창 채팅방을 엽니다.</p>
+    <p class="hint">
+      최신 대화 순으로 정렬됩니다. 더블클릭 또는 ⋮ 메뉴(우클릭)로 새 창 채팅방을 엽니다.
+    </p>
   </div>
 </template>
 
@@ -210,6 +225,9 @@ onBeforeUnmount(() => {
 .room-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .room-item { display: flex; align-items: center; gap: 10px; background: #fff; border-radius: 10px; padding: 10px 12px; cursor: pointer; user-select: none; }
 .room-item:hover { background: #e9f2ff; }
+/* 안읽은 메시지가 있는 방: 살짝 진한 배경으로 목록에서 눈에 띈다 */
+.room-item.unread { background: #fff8f8; }
+.room-item.unread:hover { background: #ffecec; }
 .room-id { font-weight: bold; color: #007bff; min-width: 44px; }
 .room-main { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .room-name { font-size: 15px; font-weight: 600; word-break: break-all; }

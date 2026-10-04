@@ -28,7 +28,6 @@ const {
   isConnected,
   connectionStatus,
   dmMessages,
-  unreadCounts,
   userlist,
   onlineUsers,
   usersDetail,
@@ -634,20 +633,9 @@ const handleUpsertUser = (payload: { nickname: string; isDeleted: boolean }) => 
   upsertUser(payload.nickname, payload.isDeleted);
 };
 
-// 새 DM이 오면 해당 상대의 새 창을 자동으로 띄운다
-// (이미 열려 있으면 포커스를 뺏지 않고 뱃지만 정리)
-watch(
-  unreadCounts,
-  (counts) => {
-    for (const peer of Object.keys(counts)) {
-      const count = counts[peer] ?? 0;
-      if (count > 0) {
-        openChatWindow(peer, false);
-      }
-    }
-  },
-  { deep: true },
-);
+// 새 1:1 DM이 와도 채팅창을 자동으로 띄우지 않는다.
+// (안 읽은 건수는 '사용자' 탭의 배지로 표시되고, 사용자가 더블클릭/메뉴로 직접 연다)
+// ── 번호방과 동일하게 목록에서만 알려주고 창은 띄우지 않는다.
 
 // 내가 만든 방이 목록에 반영되면 자동으로 새 창을 연다
 // (방 만들기 팝업에서 확인을 누른 직후 1회만 동작)
@@ -664,21 +652,8 @@ watch(
   { deep: true },
 );
 
-// 새 방 메시지가 오면 해당 방 창을 자동으로 띄운다
-// (이미 열려 있으면 포커스를 뺏지 않고 뱃지만 정리)
-watch(
-  roomUnread,
-  (counts) => {
-    for (const key of Object.keys(counts)) {
-      const roomId = Number(key);
-      const count = (counts as Record<string, number>)[key] ?? 0;
-      if (count > 0) {
-        openRoomWindow(roomId, false);
-      }
-    }
-  },
-  { deep: true },
-);
+// 새 방 메시지가 와도 채팅방 창을 자동으로 띄우지 않는다.
+// (안 읽은 건수는 '내 채팅방' 목록의 배지로 표시되고, 사용자가 더블클릭/메뉴로 직접 연다)
 
 </script>
 
@@ -737,7 +712,6 @@ watch(
       :my-nickname="nickname"
       :users="userlist"
       :online-users="onlineUsers"
-      :unread-counts="unreadCounts"
       :connection-status="connectionStatus"
       :is-connected="isConnected"
       :is-admin="isAdmin()"
