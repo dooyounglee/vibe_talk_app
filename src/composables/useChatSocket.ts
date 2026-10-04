@@ -231,6 +231,8 @@ interface HistoryEntry {
   timestamp?: number;
   /** 읽음 표시(카톡식 숫자) 계산용 서버 메시지 id */
   msgId?: number;
+  /** 서버가 함께 내려주는 원본 id (구버전 payload 호환용) */
+  id?: number;
   /** 이 메시지를 아직 안 읽은 사람 수 (0 이면 표시하지 않음) */
   unreadCount?: number;
 }
@@ -275,6 +277,13 @@ const pruneRooms = () => {
   for (const key of Object.keys(roomUnread.value)) {
     if (!alive.has(Number(key))) delete roomUnread.value[Number(key)];
   }
+};
+
+/** 서버 히스토리 항목에서 읽음 숫자 계산용 메시지 id 를 꺼낸다 (msgId 우선, id 폴백) */
+const readMsgId = (msg?: HistoryEntry): number | undefined => {
+  if (typeof msg?.msgId === "number" && msg.msgId > 0) return msg.msgId;
+  if (typeof msg?.id === "number" && msg.id > 0) return msg.id;
+  return undefined;
 };
 
 const handleIncoming = (raw: string) => {
@@ -354,7 +363,7 @@ const handleIncoming = (raw: string) => {
       nickname: String(msg?.nickname ?? withUser),
       text: String(msg?.text ?? ""),
       timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
-      msgId: typeof msg?.msgId === "number" ? msg.msgId : undefined,
+      msgId: readMsgId(msg),
       unreadCount:
         typeof msg?.unreadCount === "number" ? msg.unreadCount : 0,
     }));
@@ -395,13 +404,21 @@ const handleIncoming = (raw: string) => {
       text: String(msg?.text ?? ""),
       timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
       roomId,
-      msgId: typeof msg?.msgId === "number" ? msg.msgId : undefined,
+      // 읽음 숫자 재계산용 id. 서버는 msgId 로 주지만, 구버전 payload 는 id 만 준다.
+      // 둘 다 없으면 숫자를 재계산할 수 없으므로 undefined 로 둔다
+      // (applyReadAck 가 이 경우 기존 숫자를 보존한다).
+      msgId: readMsgId(msg),
       unreadCount:
         typeof msg?.unreadCount === "number" ? msg.unreadCount : 0,
     }));
     // NOTE: 채팅창을 열 때마다 서버가 보내는 DB 최신 내역(10건)으로 항상 덮어쓴다.
     // (접속 시 일괄 푸시 제거 + 창 열람 시 새로 조회)
     roomMessages.value[roomId] = history;
+    // 방을 열면 참여자 목록도 함께 온다 → 읽음 숫자 실시간 재계산에 쓴다.
+    // (이게 없으면 read_ack 를 받았을 때 숫자가 0으로 잘못 계산되어 한 번에 사라진다)
+    if (Array.isArray(data.members)) {
+      roomMembers.value[roomId] = data.members.map((m) => String(m));
+    }
   } else if (data.type === "room_message") {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
@@ -515,9 +532,14 @@ const handleIncoming = (raw: string) => {
     }
   } else if (data.type === "read_ack") {
     // 카톡식 읽음 숫자의 실시간 갱신.
-    // 누군가 대화를 읽으면 서버가 그 대화의 최신 커서 맵을 보내고,
+    // 누군가 대화를 읽으면 서버가 그 대화의 최신 커서 맵 + 참여자 목록을 보내고,
     // 우리는 이미 화면에 있는 메시지 중 "내 메시지"의 숫자만 다시 계산한다.
-    applyReadAck(data.scope, String(data.target ?? ""), data.cursors);
+    applyReadAck(
+      data.scope,
+      String(data.target ?? ""),
+      data.cursors,
+      data.members,
+    );
   }
 };
 
@@ -536,15 +558,19 @@ const parseCursors = (raw: unknown): Record<string, number> => {
  * 읽음 커서(각 사용자가 어디까지 읽었는지)로 안읽은 사람 수를 다시 계산한다.
  * 발신자 자신은 세지 않고, 커서가 메시지 id 보다 작은 사람만 센다.
  * (서버 db.js 의 countUnreadForMessage 와 같은 규칙 — 규칙이 달라지면 숫자가 어긋난다)
+ *
+ * msgId 를 모르면(구버전 서버/필드 누락) 숫자를 셀 수 없다.
+ * 이때 0 을 돌려주면 "안 읽은 사람 있음 → 0" 으로 잘못 덮어써져 숫자가 한 번에 사라진다.
+ * 따라서 null 을 돌려 "계산 불가"를 알리고, 호출부가 기존 값을 유지하게 한다.
  */
 const countUnread = (
   cursors: Record<string, number>,
   participants: Array<string>,
   sender: string,
   msgId?: number,
-): number => {
+): number | null => {
   const id = typeof msgId === "number" ? msgId : 0;
-  if (!id) return 0;
+  if (!id) return null;
   let n = 0;
   for (const raw of participants) {
     const nick = String(raw ?? "").trim();
@@ -557,11 +583,15 @@ const countUnread = (
 /**
  * read_ack 처리: 해당 대화 박스의 내 메시지 숫자를 갱신한다.
  * 읽음이 반영되면 숫자는 줄기만 하므로(단조 감소) 그대로 덮어써도 안전하다.
+ *
+ * 단, 계산에 필요한 값(참여자 목록 / 메시지 id)이 없으면 기존 숫자를 그대로 둔다.
+ * (값이 없다는 이유로 0 으로 덮어쓰면 숫자가 한 번에 사라지는 버그가 된다)
  */
 const applyReadAck = (
   scope: unknown,
   target: string,
   rawCursors: unknown,
+  rawMembers?: unknown,
 ) => {
   if (!target) return;
   const cursors = parseCursors(rawCursors);
@@ -571,10 +601,21 @@ const applyReadAck = (
     if (!Number.isInteger(roomId)) return;
     const box = roomMessages.value[roomId];
     if (!box) return;
-    const members = roomMembers.value[roomId] ?? [];
+    // read_ack 가 실어 온 참여자 목록을 우선 사용한다(항상 최신).
+    // 구버전 서버처럼 목록이 없으면 이미 받아둔 방 멤버 목록으로 폴백한다.
+    const ackMembers = Array.isArray(rawMembers)
+      ? rawMembers.map((m) => String(m))
+      : [];
+    const members = ackMembers.length > 0
+      ? ackMembers
+      : (roomMembers.value[roomId] ?? []);
+    // 참여자 목록을 아예 모르면 재계산하지 않고 기존 숫자를 유지한다.
+    if (members.length === 0) return;
     box.forEach((m) => {
       if (m.nickname !== me) return; // 내 메시지만 갱신
-      m.unreadCount = countUnread(cursors, members, m.nickname, m.msgId);
+      const next = countUnread(cursors, members, m.nickname, m.msgId);
+      if (next === null) return; // id 모르면 기존 값 유지
+      m.unreadCount = next;
     });
     return;
   }
@@ -584,9 +625,17 @@ const applyReadAck = (
   if (!peer) return;
   const box = dmMessages.value[peer];
   if (!box) return;
+  // 1:1 은 대화 키의 두 사람이 곧 참여자다 (read_ack.members 가 오면 그 값을 우선).
+  const dmMembers = Array.isArray(rawMembers)
+    ? rawMembers.map((m) => String(m))
+    : [];
+  const members = dmMembers.length > 0 ? dmMembers : key;
+  if (members.length === 0) return;
   box.forEach((m) => {
     if (m.nickname !== me) return;
-    m.unreadCount = countUnread(cursors, key, m.nickname, m.msgId);
+    const next = countUnread(cursors, members, m.nickname, m.msgId);
+    if (next === null) return;
+    m.unreadCount = next;
   });
 };
 
