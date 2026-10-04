@@ -42,6 +42,8 @@ export type ChatBusMessage =
   | { kind: "room-close"; roomId: number; mainId?: string }
   | { kind: "room-read"; roomId: number; mainId?: string }
   | { kind: "room-send"; roomId: number; text: string; id: string; mainId?: string }
+  // 번호방 채팅창 → 메인: 방제목 수정 요청 (소켓은 메인 창에만 있으므로 경유)
+  | { kind: "room-rename"; roomId: number; title: string; mainId?: string }
   // 메인 → 채팅창
   | ({ kind: "chat-state" } & ChatStatePayload & { mainId?: string })
   | ({ kind: "room-state" } & RoomStatePayload & { mainId?: string })

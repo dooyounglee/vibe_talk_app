@@ -1,5 +1,6 @@
 import { ref } from "vue";
 import type { ChatMessage, RoomInfo } from "../types/chat";
+import { ROOM_TITLE_INPUT_MAX_LENGTH } from "../types/chat";
 
 // ─── 모듈 싱글톤 상태 ───
 // 같은 윈도우(JS 컨텍스트) 안에서는 하나의 WebSocket만 유지한다.
@@ -23,6 +24,8 @@ const usersDetail = ref<Array<UserDetail>>([]);
 const joinError = ref("");
 // user_upsert 결과 메시지 (UserListView 모달에 표시)
 const userUpsertResult = ref("");
+// 방제목 수정 실패 사유 (RenameRoomModal에 표시). 성공하면 서버가 새 목록을 주므로 비운다.
+const roomRenameError = ref<{ roomId: number; reason: string } | null>(null);
 const isAdmin = () => nickname.value === "admin";
 
 // 번호방 상태 (내가 속한 방만)
@@ -339,6 +342,13 @@ const handleIncoming = (raw: string) => {
     // 실패 사유는 화면에서 system 메시지로 노출한다 (HomeView에서 처리)
     const roomId = Number(data.roomId);
     void roomId;
+  } else if (data.type === "room_rename_failed") {
+    // 방제목 수정 실패 사유를 상태로 보관해 모달이 알릴 수 있게 한다.
+    const roomId = Number(data.roomId);
+    roomRenameError.value = {
+      roomId: Number.isInteger(roomId) ? roomId : 0,
+      reason: String(data.reason ?? "failed"),
+    };
   } else if (data.type === "unread_state") {
     // 접속 시 서버 DB에서 내려온 안읽은 건수 전체를 그대로 적용한다.
     // (로그아웃/다른 PC에서 로그인해도 서버에 남은 값이 복원된다)
@@ -457,6 +467,18 @@ const deleteRoom = (roomId: number): boolean => {
 const refreshRooms = (): boolean => {
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   ws.send(JSON.stringify({ type: "room_list" }));
+  return true;
+};
+
+// 번호방: 사용자별 방제목 수정.
+// 서버가 room_members.display_name의 "내 행"만 고치므로 같은 방의 다른 멤버는
+// 영향을 받지 않는다. (1:1방/단체방 구분 없이 동일하게 동작한다)
+const renameRoom = (roomId: number, title: string): boolean => {
+  const trimmed = title.trim().slice(0, ROOM_TITLE_INPUT_MAX_LENGTH);
+  if (!Number.isInteger(roomId) || !trimmed) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  roomRenameError.value = null;
+  ws.send(JSON.stringify({ type: "room_rename", roomId, title: trimmed }));
   return true;
 };
 
@@ -641,6 +663,7 @@ export function useChatSocket() {
     usersDetail,
     joinError,
     userUpsertResult,
+    roomRenameError,
     isAdmin,
     myRooms,
     roomMessages,
@@ -660,6 +683,7 @@ export function useChatSocket() {
     leaveRoom,
     deleteRoom,
     refreshRooms,
+    renameRoom,
     sendRoom,
     requestDmHistory,
     requestRoomHistory,

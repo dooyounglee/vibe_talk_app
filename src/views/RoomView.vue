@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ChatWindow from "../components/ChatWindow.vue";
+import RenameRoomModal from "../components/RenameRoomModal.vue";
 import { useChatRoom } from "../composables/useChatRoom";
 import { currentRoomIdFromUrl, isTauriRuntime } from "../chatBus";
 
@@ -25,11 +26,38 @@ const roomTitle = computed(() =>
 
 const {
   messages, myNickname, roomName, connectionStatus,
-  isConnected, hasSession, send, announceClose,
+  isConnected, hasSession, send, renameRoom, announceClose,
 } = useChatRoom(roomId);
+
+// 상단 연필 → 방제목 변경 모달
+const showRenameModal = ref(false);
+const renameError = ref("");
+
+const openRenameModal = () => {
+  renameError.value = "";
+  showRenameModal.value = true;
+};
+
+const closeRenameModal = () => {
+  showRenameModal.value = false;
+  renameError.value = "";
+};
+
+const handleRename = (title: string) => {
+  if (!renameRoom(title)) {
+    renameError.value = "방제목을 변경하지 못했습니다. 연결을 확인해주세요.";
+    return;
+  }
+  closeRenameModal();
+};
 
 onMounted(() => {
   document.title = roomTitle.value;
+});
+
+// 방제목이 바뀌면(목록/다른 창에서 수정해도) 브라우저 탭 제목도 함께 갱신한다.
+watch(roomTitle, (t) => {
+  document.title = t;
 });
 
 const handleSend = (text: string) => {
@@ -70,8 +98,27 @@ const goHome = () => {
     :is-connected="isConnected"
     @send="handleSend"
     @close="handleClose"
+  >
+    <template #header-actions>
+      <button
+        class="rename-btn"
+        title="방제목 변경"
+        :disabled="!isConnected"
+        @click="openRenameModal"
+      >✏</button>
+    </template>
+  </ChatWindow>
+
+  <!-- 상단 연필로 연 방제목 변경 모달 (로그인 전에는 열리지 않는다) -->
+  <RenameRoomModal
+    v-if="showRenameModal && hasSession"
+    :current-title="roomName"
+    :error-reason="renameError"
+    @confirm="handleRename"
+    @cancel="closeRenameModal"
   />
-  <div v-else class="no-session">
+
+  <div v-if="!hasSession" class="no-session">
     <p>로그인 정보가 없습니다.<br />메인 창에서 먼저 입장해주세요.</p>
     <div class="btn-row">
       <button class="primary" @click="goHome">메인으로 이동</button>
@@ -81,6 +128,20 @@ const goHome = () => {
 </template>
 
 <style scoped>
+/* 상단 방제목 오른쪽의 연필 버튼 (ChatWindow 헤더 슬롯) */
+.rename-btn {
+  border: none;
+  background: transparent;
+  color: #fff;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+  opacity: 0.9;
+}
+.rename-btn:hover { background: rgba(255, 255, 255, 0.2); opacity: 1; }
+.rename-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .no-session {
   height: 100vh; height: 100dvh;
   display: flex; flex-direction: column;

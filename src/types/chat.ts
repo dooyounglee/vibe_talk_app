@@ -24,6 +24,9 @@ export interface RoomInfo {
 /** 화면에 보여줄 방 제목 최대 글자 수 (초과분은 "..."로 생략) */
 export const ROOM_TITLE_MAX_LENGTH = 20;
 
+/** 방제목 수정 시 입력받을 수 있는 최대 글자 수 (서버 저장 제한과 동일) */
+export const ROOM_TITLE_INPUT_MAX_LENGTH = 30;
+
 /**
  * 방 제목 화면 표기용 축약: 20자까지만 보여주고 초과하면 끝에 "..."를 붙인다.
  * (DB/전송 값은 전체 이름을 그대로 쓰고, 이 함수는 표시할 때만 쓴다)
@@ -40,6 +43,15 @@ export function truncateRoomTitle(
 export function roomDisplayName(room: RoomInfo): string {
   const d = room.displayName?.trim();
   return truncateRoomTitle(d ? d : room.name);
+}
+
+/**
+ * 방제목 원본(미축약 전체값): 수정 모달의 초기값으로 쓴다.
+ * 표시용 roomDisplayName은 20자로 잘라서 돌려주므로 편집용으로는 쓸 수 없다.
+ */
+export function roomRawName(room: RoomInfo): string {
+  const d = room.displayName?.trim();
+  return (d ? d : room.name ?? "").trim();
 }
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");

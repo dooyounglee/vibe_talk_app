@@ -11,7 +11,7 @@ import {
   type ChatBusHandler,
 } from "../chatBus";
 import type { ChatMessage } from "../types/chat";
-import { roomDisplayName, truncateRoomTitle } from "../types/chat";
+import { roomDisplayName, truncateRoomTitle, ROOM_TITLE_INPUT_MAX_LENGTH } from "../types/chat";
 import { NICKNAME_STORAGE_KEY } from "../constants";
 import { useChatSocket } from "./useChatSocket";
 
@@ -228,6 +228,26 @@ export function useChatRoom(roomId: { readonly value: number }) {
     },
   );
 
+  // 방제목 수정. 이 창에 소켓이 있으면(같은 탭) 직접 보내고,
+  // 새 창이면 소켓이 있는 메인 창에 버스로 요청만 넘긴다.
+  const renameRoom = (title: string): boolean => {
+    const target = effectiveRoomId.value;
+    if (!target) return false;
+    if (direct.value) return store.renameRoom(target, title);
+    if (!linked.value) return false;
+    try {
+      bus?.post({
+        kind: "room-rename",
+        roomId: target,
+        title: title.trim().slice(0, ROOM_TITLE_INPUT_MAX_LENGTH),
+        mainId: myMainId ?? undefined,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   return {
     messages,
     myNickname,
@@ -239,6 +259,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
     linked,
     effectiveRoomId,
     send,
+    renameRoom,
     announceOpen,
     announceClose,
   };

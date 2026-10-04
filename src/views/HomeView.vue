@@ -3,10 +3,13 @@ import { onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { WebviewWindow as WebviewWindowInstance } from "@tauri-apps/api/webviewWindow";
+import type { RoomInfo } from "../types/chat";
+import { roomRawName } from "../types/chat";
 import NicknameView from "../components/NicknameView.vue";
 import UserListView from "../components/UserListView.vue";
 import RoomListView from "../components/RoomListView.vue";
 import CreateRoomModal from "../components/CreateRoomModal.vue";
+import RenameRoomModal from "../components/RenameRoomModal.vue";
 import { useChatSocket } from "../composables/useChatSocket";
 import {
   createChatBus,
@@ -52,6 +55,7 @@ const {
   joinRoom,
   leaveRoom,
   refreshRooms,
+  renameRoom,
   sendRoom,
   upsertUser,
 } = useChatSocket();
@@ -398,6 +402,18 @@ const broadcastAllRooms = () => {
   openRooms.forEach((roomId) => broadcastRoom(roomId));
 };
 
+// 방제목이 바뀌면 이미 열려 있는 Tauri 방 창의 OS 제목도 함께 갱신한다.
+// (웹에서는 방 창이 제목 제목을 그대로 쓰므로 별도 처리가 필요 없다)
+const syncTauriRoomTitles = () => {
+  if (!isTauriRuntime()) return;
+  tauriRoomWindows.forEach((win, roomId) => {
+    const info = myRooms.value.find((r) => r.roomId === roomId);
+    const disp = info?.displayName?.trim() ? info.displayName : info?.name;
+    const title = disp ? `#${roomId} ${disp}` : `채팅방 #${roomId}`;
+    void win.setTitle(title).catch(() => undefined);
+  });
+};
+
 // 더블클릭 시 새 윈도우 창으로 1:1 채팅방을 연다.
 // 이미 열려 있으면 새로 열지 않고, 명시적 더블클릭일 때만 포커스를 준다.
 const openChatWindow = (peer: string, focusExisting = false) => {
@@ -586,6 +602,12 @@ onMounted(() => {
         clearRoomUnread(msg.roomId);
         broadcastRoom(msg.roomId);
         break;
+      case "room-rename":
+        // 채팅방 창(팝업)에서 연필로 요청한 제목 수정.
+        // 소켓은 메인 창에만 있으므로 여기서 서버로 넘기고,
+        // 서버가 my_rooms를 내려주면 목록이 → 열린 방 창 순서로 자동 갱신된다.
+        renameRoom(msg.roomId, msg.title);
+        break;
       case "room-send": {
         const key = dedupeKeyFor(msg);
         if (key) {
@@ -666,6 +688,7 @@ watch(
   () => {
     broadcastAll();
     broadcastAllRooms();
+    syncTauriRoomTitles();
   },
   {
     deep: true,
@@ -703,6 +726,31 @@ const handleConfirmCreateRoom = (payload: { members: string[] }) => {
 // 사용자 목록에서 "방 만들기" 선택 시: 해당 사용자를 미리 체크한 팝업을 연다
 const handleCreateRoomWith = (user: string) => {
   openCreateModal([user]);
+};
+
+// ─── 방제목 변경 (사용자별 — 나에게만 적용) ───
+// 채팅목록(더보기 메뉴)에서 여는 경우와, 열려 있는 채팅방 창에서 버스로 요청이 오는 경우가
+// 같은 상태를 쓴다. 어느 쪽이든 소켓은 메인 창에 있으므로 메인 창이 서버로 보낸다.
+// 서버 응답(my_rooms)으로 myRooms가 갱신 → 아래 watcher가 열린 채팅방 창 제목까지 같이 갱신한다.
+const renameRoomId = ref<number | null>(null);
+const renameTargetRoom = ref<RoomInfo | null>(null);
+
+const openRenameModal = (roomId: number) => {
+  const room = myRooms.value.find((r) => r.roomId === roomId);
+  if (!room) return;
+  renameTargetRoom.value = room;
+  renameRoomId.value = roomId;
+};
+
+const closeRenameModal = () => {
+  renameRoomId.value = null;
+  renameTargetRoom.value = null;
+};
+
+const handleConfirmRename = (title: string) => {
+  if (renameRoomId.value === null) return;
+  renameRoom(renameRoomId.value, title);
+  closeRenameModal();
 };
 
 // ─── 사용자 관리: 추가/수정 (admin 전용) ───
@@ -783,6 +831,7 @@ watch(
       @request-create="() => openCreateModal()"
       @join-room="(id) => joinRoom(id)"
       @leave-room="(id) => leaveRoom(id)"
+      @rename-room="(id) => openRenameModal(id)"
       @refresh="() => refreshRooms()"
     />
     <UserListView
@@ -809,6 +858,14 @@ watch(
       :my-nickname="nickname"
       @confirm="handleConfirmCreateRoom"
       @cancel="closeCreateModal"
+    />
+
+    <!-- 방제목 변경 팝업: 채팅목록 ⋮ 메뉴(또는 우클릭) → '방제목 변경' -->
+    <RenameRoomModal
+      v-if="renameRoomId !== null && renameTargetRoom"
+      :current-title="roomRawName(renameTargetRoom)"
+      @confirm="handleConfirmRename"
+      @cancel="closeRenameModal"
     />
   </div>
 

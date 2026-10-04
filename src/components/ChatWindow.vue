@@ -51,7 +51,11 @@ watch(
     <div class="chat-window">
       <div class="chat-header">
         <span class="peer">{{ peer }}님과의 1:1 채팅</span>
-        <button class="close-btn" @click="$emit('close')">✕</button>
+        <span class="header-actions">
+          <!-- 채팅방 상단 연필 등, 창마다 다른 액션 슬롯 -->
+          <slot name="header-actions" />
+          <button class="close-btn" @click="$emit('close')">✕</button>
+        </span>
       </div>
       <div v-if="!isConnected" class="conn-banner">{{ connectionStatus }}</div>
       <div ref="bodyRef" class="chat-body">
@@ -117,6 +121,8 @@ watch(
   font-size: 16px;
   cursor: pointer;
 }
+/* 헤더 우측 액션 영역 (슬롯 + 닫기 버튼) */
+.header-actions { display: flex; align-items: center; gap: 8px; }
 .conn-banner {
   padding: 6px 12px;
   font-size: 12px;
