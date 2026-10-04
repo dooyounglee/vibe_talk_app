@@ -40,6 +40,26 @@ const findOneToOneRoomId = (peer: string): number | null => {
   return hit ? hit.roomId : null;
 };
 
+// 위(findOneToOneRoomId)의 역방향: 1:1 방 번호 → 상대 닉네임.
+// DM창과 1:1 방창은 같은 대화의 두 가지 진입점이므로, 한쪽 탭에서 이미 띄운
+// 창을 다른 쪽 탭에서 열 때 중복으로 뜨지 않게 focus만 주기 위해 쓴다.
+// 그룹방(3명 이상)이면 null → 호출한 쪽은 평소대로 새 창을 만든다.
+const oneToOnePeerOfRoom = (roomId: number): string | null => {
+  const me = nickname.value.trim();
+  // 1순위: 방을 열며 받은 실제 멤버 목록이 있으면 이를 따른다 (가장 정확)
+  const members = (roomMembers.value[roomId] ?? [])
+    .map((m) => m.trim())
+    .filter((m) => m !== "");
+  if (members.length === 2 && members.includes(me)) {
+    return members.find((m) => m !== me) ?? null;
+  }
+  // 폴백: 아직 room_members를 못 받은 경우 내 방 목록의 표시제목(=상대 닉네임)으로 판단
+  const info = myRooms.value.find((r) => r.roomId === roomId);
+  if (!info || info.memberCount !== 2) return null;
+  const display = (info.displayName ?? "").trim();
+  return display && display !== me ? display : null;
+};
+
 // ─── 안읽은 건수: 서버 DB가 단일 진실 ───
 // localStorage는 브라우저(PC)별이라 다른 기기에서 로그인하면 안읽은 건수가 사라진다.
 // 그래서 서버 unread 테이블이 진실이고, 클라이언트는 아래 신호로만 배지를 갱신한다.
@@ -392,20 +412,21 @@ const sendDm = (to: string, text: string): boolean => {
 };
 
 // 번호방 액션 (메인 창의 단일 소켓으로 전송)
-const createRoomAction = (name: string, members: string[] = []): boolean => {
-  const trimmed = name.trim();
-  if (trimmed === "") return false;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+// 방 이름은 직접 입력받지 않는다. 서버가 실제 멤버 기준으로
+// "참여자 이름 오름차순 쉼표 연결"을 만들어 rooms.name / room_members.display_name에 넣는다.
+// (이 이름이 자동 생성 규칙의 유일한 진실이라 규칙이 어긋날 여지가 없다)
+const createRoomAction = (members: string[] = []): boolean => {
   const cleanMembers = Array.isArray(members)
     ? members
         .map((m) => String(m ?? "").trim())
         .filter((m) => m && m !== nickname.value)
         .slice(0, 50)
     : [];
+  if (cleanMembers.length === 0) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   ws.send(
     JSON.stringify({
       type: "room_create",
-      name: trimmed.slice(0, 30),
       members: cleanMembers,
     }),
   );
@@ -625,6 +646,8 @@ export function useChatSocket() {
     roomMessages,
     roomUnread,
     roomMembers,
+    findOneToOneRoomId,
+    oneToOnePeerOfRoom,
     connect,
     attemptReconnect,
     manualReconnect,

@@ -11,7 +11,7 @@ export interface RoomInfo {
   name: string;
   owner: string;
   memberCount: number;
-  /** 사용자별 표시 제목 (1:1=상대 닉네임, 없으면 name으로 폴백) */
+  /** 사용자별 표시 제목 (1:1=상대 닉네임, 3명 이상=전체 참여자 이름 연결, 없으면 name으로 폴백) */
   displayName?: string;
   /** 목록 미리보기용 마지막 메시지 내용 (메시지 없으면 null) */
   lastMessage?: string | null;
@@ -21,10 +21,25 @@ export interface RoomInfo {
   lastMessageSender?: string | null;
 }
 
-/** 방 표시 제목: displayName 우선, 없으면 name */
+/** 화면에 보여줄 방 제목 최대 글자 수 (초과분은 "..."로 생략) */
+export const ROOM_TITLE_MAX_LENGTH = 20;
+
+/**
+ * 방 제목 화면 표기용 축약: 20자까지만 보여주고 초과하면 끝에 "..."를 붙인다.
+ * (DB/전송 값은 전체 이름을 그대로 쓰고, 이 함수는 표시할 때만 쓴다)
+ */
+export function truncateRoomTitle(
+  title?: string | null,
+  maxLength: number = ROOM_TITLE_MAX_LENGTH,
+): string {
+  const text = (title ?? "").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+/** 방 표시 제목: displayName 우선, 없으면 name (화면 표시는 20자까지) */
 export function roomDisplayName(room: RoomInfo): string {
   const d = room.displayName?.trim();
-  return d ? d : room.name;
+  return truncateRoomTitle(d ? d : room.name);
 }
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");

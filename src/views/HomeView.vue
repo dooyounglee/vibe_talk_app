@@ -38,6 +38,8 @@ const {
   roomMessages,
   roomUnread,
   roomMembers,
+  findOneToOneRoomId,
+  oneToOnePeerOfRoom,
   connect,
   manualReconnect,
   disconnect,
@@ -113,6 +115,8 @@ const chatWindowLabel = (peer: string) =>
 
 // 웹 브라우저용: window.open 팝업으로 채팅창을 연다
 const openBrowserChatWindow = (peer: string, focusExisting: boolean) => {
+  // 같은 대화가 '내 채팅방' 탭에서 띄운 1:1 방창으로 이미 떠 있으면 새 창을 띄우지 않고 focus만 준다
+  if (focusBrowserRoomWindowOfPeer(peer)) return;
   const existing = chatWindows.value.get(peer);
   if (existing && !existing.closed) {
     if (focusExisting) {
@@ -165,6 +169,8 @@ const openTauriChatWindowWith = async (
   peer: string,
   focusExisting: boolean,
 ) => {
+  // 같은 대화가 '내 채팅방' 탭에서 띄운 1:1 방창으로 이미 떠 있으면 새 창을 띄우지 않고 focus만 준다
+  if (await focusTauriRoomWindowOfPeer(Ctor, peer)) return;
   const label = chatWindowLabel(peer);
   const existing = await Ctor.getByLabel(label);
   if (existing) {
@@ -212,7 +218,73 @@ const openTauriChatWindowWith = async (
 // 번호방: 새 창 열기 (웹 팝업 / Tauri WebviewWindow)
 const roomWindowLabel = (roomId: number) => `room_${roomId}`;
 
-const openBrowserRoomWindow = (roomId: number, focusExisting: boolean) => {
+// ─── 이미 떠 있는 채팅창 재사용 (focus만 줌) ───
+// '내 채팅방' 탭의 1:1 방창과 '사용자' 탭의 DM창은 같은 대화를 보여준다.
+// 그래서 한쪽 탭에서 띄운 창을 다른 쪽 탭에서 열면 창이 중복으로 뜨므로,
+// 열기 전에 반대쪽 창이 떠 있는지 확인해 focus만 주고 새 창은 만들지 않는다.
+// (떠 있는 창은 메인 버스로 스냅샷을 계속 받고 읽음 신호도 스스로 보내므로
+//  히스토리 재요청·읽음 처리 같은 추가 작업은 필요 없다)
+
+// 웹: 이미 떠 있는 팝업에 focus만 준다 (안 떠 있으면 false → 새 창 생성으로 진행)
+const focusBrowserChild = (child: Window | null | undefined): boolean => {
+  if (!child || child.closed) return false;
+  child.focus();
+  return true;
+};
+
+// '사용자' 탭에서 peer 의 1:1을 열 때, 그 대话的 1:1 방창이 떠 있으면 focus만 준다
+const focusBrowserRoomWindowOfPeer = (peer: string): boolean => {
+  const roomId = findOneToOneRoomId(peer);
+  if (roomId === null) return false;
+  return focusBrowserChild(roomWindows.value.get(roomId));
+};
+
+// '내 채팅방' 탭에서 1:1 방을 열 때, 그 대화의 DM창이 떠 있으면 focus만 준다
+const focusBrowserChatWindowOfRoom = (roomId: number): boolean => {
+  const peer = oneToOnePeerOfRoom(roomId);
+  if (!peer) return false;
+  return focusBrowserChild(chatWindows.value.get(peer));
+};
+
+// Tauri: 라벨로 이미 떠 있는 OS 윈도우를 찾아 show + focus만 준다 (없으면 false)
+const focusTauriWindowByLabel = async (
+  Ctor: typeof WebviewWindow,
+  label: string,
+): Promise<boolean> => {
+  try {
+    const win = await Ctor.getByLabel(label);
+    if (!win) return false;
+    await win.show().catch(() => undefined);
+    await win.setFocus().catch(() => undefined);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const focusTauriRoomWindowOfPeer = (
+  Ctor: typeof WebviewWindow,
+  peer: string,
+): Promise<boolean> => {
+  const roomId = findOneToOneRoomId(peer);
+  if (roomId === null) return Promise.resolve(false);
+  return focusTauriWindowByLabel(Ctor, roomWindowLabel(roomId));
+};
+
+const focusTauriChatWindowOfRoom = (
+  Ctor: typeof WebviewWindow,
+  roomId: number,
+): Promise<boolean> => {
+  const peer = oneToOnePeerOfRoom(roomId);
+  if (!peer) return Promise.resolve(false);
+  return focusTauriWindowByLabel(Ctor, chatWindowLabel(peer));
+};
+
+// reuseDmWindow: 같은 대화가 '사용자' 탭의 DM창으로 떠 있으면 그 창에 focus만 줄지.
+// 방 만들기로 막 만들어진 새 방은 기존 1:1방과 다른 방이므로 false로 새 창을 연다.
+const openBrowserRoomWindow = (roomId: number, focusExisting: boolean, reuseDmWindow: boolean) => {
+  // 같은 대화가 '사용자' 탭에서 띄운 DM창으로 이미 떠 있으면 새 방창을 띄우지 않고 focus만 준다
+  if (reuseDmWindow && focusBrowserChatWindowOfRoom(roomId)) return;
   const existing = roomWindows.value.get(roomId);
   if (existing && !existing.closed) {
     if (focusExisting) existing.focus();
@@ -247,7 +319,10 @@ const openTauriRoomWindowWith = async (
   Ctor: typeof WebviewWindow,
   roomId: number,
   focusExisting: boolean,
+  reuseDmWindow: boolean,
 ) => {
+  // 같은 대화가 '사용자' 탭에서 띄운 DM창으로 이미 떠 있으면 새 방창을 띄우지 않고 focus만 준다
+  if (reuseDmWindow && (await focusTauriChatWindowOfRoom(Ctor, roomId))) return;
   const label = roomWindowLabel(roomId);
   const existing = await Ctor.getByLabel(label);
   if (existing) {
@@ -285,14 +360,16 @@ const openTauriRoomWindowWith = async (
   clearRoomUnread(roomId);
 };
 
-const openRoomWindow = (roomId: number, focusExisting = false) => {
+// reuseDmWindow: 같은 대화가 '사용자' 탭의 DM창으로 떠 있으면 그 창에 focus만 줄지.
+// 방 만들기로 막 만들어진 새 방은 기존 1:1방과 다른 방이므로 false로 새 창을 연다.
+const openRoomWindow = (roomId: number, focusExisting = false, reuseDmWindow = true) => {
   if (!roomId) return;
   clearWindowError();
   if (!isTauriRuntime()) {
-    openBrowserRoomWindow(roomId, focusExisting);
+    openBrowserRoomWindow(roomId, focusExisting, reuseDmWindow);
     return;
   }
-  void openTauriRoomWindowWith(WebviewWindow, roomId, focusExisting).catch(
+  void openTauriRoomWindowWith(WebviewWindow, roomId, focusExisting, reuseDmWindow).catch(
     (e: unknown) => {
       const detail = e instanceof Error ? e.message : String(e);
       showWindowError(`채팅방 창 열기 실패: ${detail}`);
@@ -614,8 +691,8 @@ const closeCreateModal = () => {
   createModalInitial.value = [];
 };
 
-const handleConfirmCreateRoom = (payload: { name: string; members: string[] }) => {
-  const ok = createRoom(payload.name, payload.members);
+const handleConfirmCreateRoom = (payload: { members: string[] }) => {
+  const ok = createRoom(payload.members);
   if (ok) {
     pendingAutoOpen.value = true;
     closeCreateModal();
@@ -647,7 +724,8 @@ watch(
     // 가장 큰 방 번호 = 방금 생성된 방 (서버는 AUTOINCREMENT 발급)
     const latest = rooms.reduce((a, b) => (a.roomId > b.roomId ? a : b));
     pendingAutoOpen.value = false;
-    openRoomWindow(latest.roomId, true);
+    // 방 만들기로 막 만든 새 방이므로, 같은 대화의 DM창이 떠 있어도 새 방창을 연다
+    openRoomWindow(latest.roomId, true, false);
   },
   { deep: true },
 );
@@ -723,11 +801,12 @@ watch(
       @disconnect="handleLeave"
       @upsert-user="handleUpsertUser"
     />
-    <!-- 방 만들기 팝업: 사용자 1명 이상 체크 후 확인 -->
+    <!-- 방 만들기 팝업: 사용자 1명 이상 체크 후 확인 (방 이름은 자동 생성) -->
     <CreateRoomModal
       v-if="showCreateModal"
       :users="userlist"
       :initial-selected="createModalInitial"
+      :my-nickname="nickname"
       @confirm="handleConfirmCreateRoom"
       @cancel="closeCreateModal"
     />

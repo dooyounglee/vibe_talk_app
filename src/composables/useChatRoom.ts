@@ -11,6 +11,7 @@ import {
   type ChatBusHandler,
 } from "../chatBus";
 import type { ChatMessage } from "../types/chat";
+import { roomDisplayName, truncateRoomTitle } from "../types/chat";
 import { NICKNAME_STORAGE_KEY } from "../constants";
 import { useChatSocket } from "./useChatSocket";
 
@@ -118,11 +119,12 @@ export function useChatRoom(roomId: { readonly value: number }) {
     direct.value ? store.nickname.value : busNickname.value,
   );
   const rname: ComputedRef<string> = computed(() => {
-    if (!direct.value) return busRoomName.value;
+    if (!direct.value) return truncateRoomTitle(busRoomName.value);
     const info = myInfo.value;
     if (!info) return "";
-    // 사용자별 표시제목 우선 (1:1=상대닉네임), 없으면 rooms.name 폴백
-    return info.displayName?.trim() ? info.displayName : (info.name ?? "");
+    // 사용자별 표시제목 우선 (1:1=상대닉네임, 그룹=전체 참여자 이름 연결), 없으면 rooms.name 폴백.
+    // 화면 표기는 20자까지 축약하되, 목록과 창 제목이 서로 어긋나지 않게 같은 함수를 쓴다.
+    return roomDisplayName(info);
   });
   const members: ComputedRef<string[]> = computed(() =>
     direct.value
