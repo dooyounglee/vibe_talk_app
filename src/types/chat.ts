@@ -6,7 +6,12 @@ export interface ChatMessage {
   roomId?: number;
   /** 서버 messages.id — 읽음 표시(카톡식 '1'/'4') 계산 기준 */
   msgId?: number;
-  /** 이 메시지를 아직 안 읽은 사람 수 (카톡의 메시지별 숫자). 0이면 표시하지 않는다 */
+  /**
+   * 이 메시지를 아직 안 읽은 사람 수 (카톡의 메시지별 숫자). 0이면 표시하지 않는다.
+   * 발신자와 "지금 이 화면을 보는 사람(열람자)"은 제외한 미열람 인원이라
+   * 내 메시지(message-self)와 상대 메시지(message-other) 모두에 붙는다.
+   * 예) 3명 방에서 A 발신 → B가 열람, C가 미열람 이면 A 화면과 B 화면 모두 '1'
+   */
   unreadCount?: number;
 }
 

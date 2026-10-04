@@ -68,9 +68,13 @@ watch(
           class="message-row"
           :class="msg.nickname === myNickname ? 'row-self' : 'row-other'"
         >
-          <!-- 카톡식 읽음 표시: 내가 보낸 메시지이고 아직 안 읽은 사람이 있을 때만 숫자를 붙인다 -->
+          <!-- 카톡식 읽음 표시: 아직 안 읽은 사람이 있으면 숫자를 붙인다.
+               내 메시지(message-self)와 상대 메시지(message-other) 모두 붙고,
+               숫자는 '발신자 + 지금 화면을 보는 나(열람자)'를 제외한 미열람 인원이다.
+               예) 3명 방에서 A 발신 → B 열람, C 미열람
+                   A 화면 '1'(C), B 화면도 A 의 메시지 옆에 '1'(C) -->
           <span
-            v-if="msg.nickname === myNickname && (msg.unreadCount ?? 0) > 0"
+            v-if="(msg.unreadCount ?? 0) > 0"
             class="unread-count"
             :title="`${msg.unreadCount}명이 아직 읽지 않았습니다`"
           >{{ msg.unreadCount }}</span>
@@ -162,7 +166,9 @@ watch(
 }
 .row-self { align-self: flex-end; flex-direction: row; }
 .row-other { align-self: flex-start; }
-/* 상대 메시지는 숫자 없이 풍선만 */
+/* 상대 메시지(message-other): 숫자를 풍선 오른쪽에 둔다 (카톡의 받은 메시지 표시) */
+.row-other .unread-count { order: 2; }
+/* 풍선 색상 — 내 메시지(초록) / 상대 메시지(흰색) */
 .message-self {
   background: #d1e7dd;
   padding: 8px 12px;
