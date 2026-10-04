@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { truncateRoomTitle } from "../types/chat";
 
 const props = defineProps<{
@@ -16,13 +16,6 @@ const emit = defineEmits<{
 const selected = ref<Set<string>>(new Set(props.initialSelected ?? []));
 const error = ref("");
 
-watch(
-  () => props.initialSelected,
-  (v) => {
-    selected.value = new Set(v ?? []);
-  },
-);
-
 const toggle = (user: string) => {
   const next = new Set(selected.value);
   if (next.has(user)) next.delete(user);
@@ -30,6 +23,50 @@ const toggle = (user: string) => {
   selected.value = next;
   error.value = "";
 };
+
+// ─── 사용자 검색 ───
+// 검색 결과(filteredUsers)와 선택 상태(selected)는 서로 다른 상태다.
+// 검색어를 바꿔도 selected는 그대로 유지되므로, 여러 번 검색해도 위 칩 목록에서
+// 현재 체크된 사용자를 그대로 확인할 수 있다.
+// (모달은 HomeView에서 v-if로 매번 새로 마운트되므로 keyword는 자동 초기화된다)
+const keyword = ref("");
+const searchInputRef = ref<HTMLInputElement | null>(null);
+
+// 검색 결과: 대소문자 무시 부분 일치 + 닉네임 오름차순
+// (정렬 기준은 UserListView.vue의 sortedUsers와 동일하게 localeCompare)
+const filteredUsers = computed<string[]>(() => {
+  const q = keyword.value.trim().toLowerCase();
+  const list = q
+    ? props.users.filter((u) => u.toLowerCase().includes(q))
+    : props.users;
+  return [...list].sort((a, b) => a.localeCompare(b));
+});
+
+// 칩의 [×]와 목록 체크박스는 같은 동작(토글)이다.
+const removeChip = (user: string) => toggle(user);
+
+// 선택한 사용자 한꺼번에 해제
+const clearSelected = () => {
+  selected.value = new Set();
+  error.value = "";
+};
+
+// Esc: 검색어가 있으면 검색어만 지우고, 없을 때만 모달을 닫는다.
+const onEsc = () => {
+  if (keyword.value) keyword.value = "";
+  else emit("cancel");
+};
+
+// 열리면 검색창에 자동 포커스 (박스를 클릭하지 않고 바로 타이핑 가능)
+onMounted(() => searchInputRef.value?.focus());
+
+watch(
+  () => props.initialSelected,
+  (v) => {
+    selected.value = new Set(v ?? []);
+    keyword.value = "";
+  },
+);
 
 // ─── 방 이름 자동 생성 ───
 // 1:1방(나 + 선택 1명): 서로의 이름이 뜸(서버가 상대 닉네임을 display_name으로 저장)
@@ -80,10 +117,64 @@ const confirm = () => {
         <span class="room-name-value" :title="defaultName">{{ previewName }}</span>
       </div>
       <p class="modal-desc">{{ previewHint }}</p>
-      <p class="modal-desc">초대할 사용자를 한 명 이상 선택하세요. ({{ selected.size }}명 선택됨)</p>
+
+      <!-- ① 선택한 사용자: 검색과 분리된 고정 영역 (검색어를 바꿔도 유지된다) -->
+      <div class="selected-box">
+        <div class="selected-head">
+          <span class="selected-title">선택한 사용자 ({{ selected.size }}명)</span>
+          <button
+            v-if="selected.size > 0"
+            class="clear-all-btn"
+            @click="clearSelected"
+          >
+            전체 해제
+          </button>
+        </div>
+        <p v-if="selected.size === 0" class="selected-empty">
+          아래 목록에서 초대할 사용자를 선택하세요.
+        </p>
+        <div v-else class="chip-list">
+          <span v-for="user in memberList" :key="user" class="chip">
+            <span class="chip-avatar">{{ user.slice(0, 1) }}</span>
+            <span class="chip-name" :title="user">{{ user }}</span>
+            <button
+              class="chip-x"
+              :title="user + ' 선택 해제'"
+              @click="removeChip(user)"
+            >
+              ×
+            </button>
+          </span>
+        </div>
+      </div>
+
+      <!-- ② 검색: 입력값은 filteredUsers(복사본)만 필터링하므로 selected는 건드리지 않는다 -->
+      <div class="search-row">
+        <span class="search-icon">🔍</span>
+        <input
+          ref="searchInputRef"
+          v-model="keyword"
+          class="search-input"
+          type="text"
+          placeholder="사용자 검색"
+          @keyup.esc="onEsc"
+        />
+        <button
+          v-if="keyword"
+          class="search-clear"
+          title="검색어 지우기"
+          @click="keyword = ''"
+        >
+          ×
+        </button>
+      </div>
+
       <p v-if="users.length === 0" class="empty">현재 초대 가능한 사용자가 없습니다.</p>
+      <p v-else-if="filteredUsers.length === 0" class="empty">
+        "{{ keyword }}" 검색 결과가 없습니다.
+      </p>
       <ul v-else class="select-list">
-        <li v-for="user in users" :key="user" class="select-item">
+        <li v-for="user in filteredUsers" :key="user" class="select-item">
           <label>
             <input
               type="checkbox"
@@ -157,6 +248,111 @@ const confirm = () => {
 }
 .modal-desc { font-size: 13px; color: #555; margin: 10px 0 8px; }
 .empty { font-size: 13px; color: #888; }
+
+/* ─── 선택한 사용자(칩) 영역: 검색과 분리된 고정 영역 ─── */
+.selected-box {
+  padding: 9px 10px;
+  border: 1px solid #eee;
+  border-radius: 8px;
+  box-sizing: border-box;
+  background: #f7f9fc;
+}
+.selected-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.selected-title { font-size: 12px; color: #888; }
+.clear-all-btn {
+  padding: 2px 6px;
+  font-size: 11px;
+  color: #888;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.clear-all-btn:hover { color: #d33; text-decoration: underline; }
+.selected-empty { font-size: 12px; color: #999; margin: 0; }
+/* 선택 인원이 많아도 아래 검색 결과 목록을 밀지 않도록 칩 영역만 스크롤 */
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 84px;
+  overflow-y: auto;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 6px 3px 4px;
+  background: #fff;
+  border: 1px solid #cfe0ff;
+  border-radius: 999px;
+  font-size: 13px;
+}
+.chip-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #007bff;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+.chip-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip-x {
+  border: none;
+  background: none;
+  color: #999;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.chip-x:hover { color: #d33; }
+
+/* ─── 검색 영역 ─── */
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 8px;
+}
+.search-icon { font-size: 13px; flex-shrink: 0; }
+.search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  font-size: 14px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+.search-input:focus { outline: none; border-color: #007bff; }
+.search-clear {
+  border: none;
+  background: none;
+  color: #999;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.search-clear:hover { color: #d33; }
+
 .select-list {
   list-style: none;
   margin: 0;
@@ -164,7 +360,7 @@ const confirm = () => {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 260px;
+  max-height: 220px;
   overflow-y: auto;
 }
 .select-item label {
