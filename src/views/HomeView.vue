@@ -51,6 +51,10 @@ const {
   requestRoomHistory,
   clearUnread,
   clearRoomUnread,
+  setPeerFocus,
+  setRoomFocus,
+  forgetPeerFocus,
+  forgetRoomFocus,
   createRoom,
   joinRoom,
   leaveRoom,
@@ -566,10 +570,11 @@ onMounted(() => {
       }
       case "chat-close":
         openPeers.delete(msg.peer);
+        forgetPeerFocus(msg.peer);
         break;
-      case "chat-read":
-        clearUnread(msg.peer);
-        broadcastPeer(msg.peer);
+      // 채팅창 focus/blur 보고 → "보고 있는 중"인 대화는 안읽은 건수를 잡지 않는다.
+      case "chat-focus":
+        setPeerFocus(msg.peer, msg.focused);
         break;
       case "chat-send": {
         // BroadcastChannel + tauri event 양쪽으로 같은 메시지가 올 수 있어 id로 중복 제거
@@ -597,10 +602,10 @@ onMounted(() => {
       }
       case "room-close":
         openRooms.delete(msg.roomId);
+        forgetRoomFocus(msg.roomId);
         break;
-      case "room-read":
-        clearRoomUnread(msg.roomId);
-        broadcastRoom(msg.roomId);
+      case "room-focus":
+        setRoomFocus(msg.roomId, msg.focused);
         break;
       case "room-rename":
         // 채팅방 창(팝업)에서 연필로 요청한 제목 수정.

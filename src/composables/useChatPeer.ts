@@ -13,6 +13,7 @@ import {
 import type { ChatMessage } from "../types/chat";
 import { NICKNAME_STORAGE_KEY } from "../constants";
 import { useChatSocket } from "./useChatSocket";
+import { useWindowFocus } from "./useWindowFocus";
 
 /**
  * 1:1 채팅방(peer)용 상태 바인딩.
@@ -92,6 +93,8 @@ export function useChatPeer(peer: { readonly value: string }) {
     } else if (msg.kind === "main-ready") {
       // 메인 창이 (재)시작됐을 때 다시 자신을 알린다
       announceOpen();
+      // "아직 보고 있는 중"도 함께 알려 배지가 되살아나지 않게 한다
+      announceFocus();
     } else if (msg.kind === "main-closing") {
       linked.value = false;
       busIsConnected.value = false;
@@ -174,6 +177,38 @@ export function useChatPeer(peer: { readonly value: string }) {
     store.requestDmHistory(peer);
   });
 
+  // ─── focus 상태 보고 (안읽은 건수 정책) ───
+  // 이 창이 focus되어 있는 동안은 메인 채팅목록에 안읽은 건수를 잡지 않는다.
+  // blur되면 다시 잡히고, 다시 focus하면 그 순간 0이 된다 (setPeerFocus가 처리).
+  let lastFocus: boolean | null = null;
+  const reportFocus = (focused: boolean) => {
+    const target = effectivePeer.value;
+    if (!target) return;
+    lastFocus = focused;
+    if (direct.value) {
+      store.setPeerFocus(target, focused);
+      return;
+    }
+    try {
+      bus?.post({
+        kind: "chat-focus",
+        peer: target,
+        focused,
+        mainId: myMainId ?? undefined,
+      });
+    } catch {
+      // 무시
+    }
+  };
+
+  // 메인 창이 (재)시작되면 포커스 상태를 한 번 더 알린다.
+  // (chat-open과 별개로, "아직 보고 있는 중"임을 알려 배지가 되살아나지 않게 한다)
+  const announceFocus = () => {
+    reportFocus(lastFocus === true);
+  };
+
+  useWindowFocus(reportFocus);
+
   onMounted(() => {
     if (direct.value) {
       store.clearUnread(effectivePeer.value);
@@ -234,26 +269,9 @@ export function useChatPeer(peer: { readonly value: string }) {
     bus = null;
   });
 
-  // 화면에 보이는 메시지가 늘어나면 읽음 처리 요청 (메인 unread 뱃지 정리용).
-  // NOTE: chat-state 스냅샷 통째 교체(0→1) 때도 1회는 chat-read를 보낸다.
-  // 메인은 chat-read에 broadcastPeer로만 응답하므로 핑퐁이 돌지 않는다
-  // (룸 unread/DM unread watch와 분리되어 있음).
-  watch(
-    () => messages.value.length,
-    (len, prev) => {
-      if (len > prev) {
-        if (direct.value) {
-          store.clearUnread(effectivePeer.value);
-        } else if (linked.value) {
-          try {
-            bus?.post({ kind: "chat-read", peer: effectivePeer.value, mainId: myMainId ?? undefined });
-          } catch {
-            // 무시
-          }
-        }
-      }
-    },
-  );
+  // NOTE: focus가 해제된 상태에서 메시지가 도착하면 안읽은 건수를 잡아야 하므로
+  // "메시지가 보이면 무조건 읽음 처리"하는 로직은 두지 않는다.
+  // 읽음 판정은 위 useWindowFocus가 만든 focus 상태로만 결정된다.
 
   return {
     messages,

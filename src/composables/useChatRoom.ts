@@ -14,6 +14,7 @@ import type { ChatMessage } from "../types/chat";
 import { roomDisplayName, truncateRoomTitle, ROOM_TITLE_INPUT_MAX_LENGTH } from "../types/chat";
 import { NICKNAME_STORAGE_KEY } from "../constants";
 import { useChatSocket } from "./useChatSocket";
+import { useWindowFocus } from "./useWindowFocus";
 
 const LINK_TIMEOUT_MS = 3500;
 
@@ -74,6 +75,33 @@ export function useChatRoom(roomId: { readonly value: number }) {
       bus?.post({ kind: "room-close", roomId: target, mainId: myMainId ?? undefined });
     } catch { /* 무시 */ }
   };
+  // ─── focus 상태 보고 (안읽은 건수 정책) ───
+  // 이 창이 focus되어 있는 동안은 메인 채팅목록에 안읽은 건수를 잡지 않는다.
+  // blur되면 다시 잡히고, 다시 focus하면 그 순간 0이 된다 (setRoomFocus가 처리).
+  let lastFocus: boolean | null = null;
+  const reportFocus = (focused: boolean) => {
+    const target = effectiveRoomId.value;
+    if (!target) return;
+    lastFocus = focused;
+    if (direct.value) {
+      store.setRoomFocus(target, focused);
+      return;
+    }
+    try {
+      bus?.post({
+        kind: "room-focus",
+        roomId: target,
+        focused,
+        mainId: myMainId ?? undefined,
+      });
+    } catch { /* 무시 */ }
+  };
+  // 메인 창이 (재)시작되면 포커스 상태를 한 번 더 알린다.
+  const announceFocus = () => {
+    reportFocus(lastFocus === true);
+  };
+  useWindowFocus(reportFocus);
+
   const handleBusMessage: ChatBusHandler = (msg) => {
     if ("mainId" in msg && msg.mainId !== undefined && myMainId !== null && msg.mainId !== myMainId) return;
     if (msg.kind === "room-state") {
@@ -84,6 +112,8 @@ export function useChatRoom(roomId: { readonly value: number }) {
       );
     } else if (msg.kind === "main-ready") {
       announceOpen();
+      // "아직 보고 있는 중"도 함께 알려 배지가 되살아나지 않게 한다
+      announceFocus();
     } else if (msg.kind === "main-closing") {
       linked.value = false;
       busIsConnected.value = false;
@@ -211,22 +241,9 @@ export function useChatRoom(roomId: { readonly value: number }) {
     bus = null;
   });
 
-  watch(
-    () => messages.value.length,
-    (len, prev) => {
-      if (len > prev) {
-        if (direct.value) {
-          store.clearRoomUnread(effectiveRoomId.value);
-        } else if (linked.value) {
-          try {
-            bus?.post({ kind: "room-read", roomId: effectiveRoomId.value, mainId: myMainId ?? undefined });
-          } catch {
-            // 무시
-          }
-        }
-      }
-    },
-  );
+  // NOTE: focus가 해제된 상태에서 메시지가 도착하면 안읽은 건수를 잡아야 하므로
+  // "메시지가 보이면 무조건 읽음 처리"하는 로직은 두지 않는다.
+  // 읽음 판정은 위 useWindowFocus가 만든 focus 상태로만 결정된다.
 
   // 방제목 수정. 이 창에 소켓이 있으면(같은 탭) 직접 보내고,
   // 새 창이면 소켓이 있는 메인 창에 버스로 요청만 넘긴다.

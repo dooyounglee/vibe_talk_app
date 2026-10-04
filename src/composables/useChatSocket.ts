@@ -129,6 +129,95 @@ const clearRoomUnread = (roomId: number) => {
   sendUnreadClear("room", roomId);
 };
 
+// ─── 포커스 중인 대화 (안읽은 건수를 잡지 않을 대상) ───
+// 채팅방 창은 메인 창과 별개 프로세스(윈도우/팝업)이므로, 그 창이 focus되어 있는지
+// 메인 창이 알 수 없다. 채팅창이 useWindowFocus로 감지해 bus로 보고하고,
+// 메인 창(=소켓 소유자)이 아래 상태를 진실로 들고 있다.
+// focus 중에는 unread_bump가 도착해도 건수를 올리지 않고 0으로 되돌린다.
+const focusedPeers = ref<Record<string, boolean>>({});
+const focusedRooms = ref<Record<number, boolean>>({});
+
+const isPeerFocused = (peer: string): boolean =>
+  !!peer && focusedPeers.value[peer] === true;
+const isRoomFocused = (roomId: number): boolean =>
+  Number.isInteger(roomId) && focusedRooms.value[roomId] === true;
+
+/**
+ * DM은 '사용자' 탭(1:1 채팅창)과 '내 채팅방' 탭(1:1 자동방)이 같은 대화를 가리킨다.
+ * 한쪽 창만 focus되어 있어도 다른 쪽 배지는 잡히면 안 되므로,
+ * 두 진입점을 하나의 대화로 보고 판정한다.
+ */
+const isPeerConversationFocused = (peer: string): boolean => {
+  if (isPeerFocused(peer)) return true;
+  const roomId = findOneToOneRoomId(peer);
+  return roomId !== null && isRoomFocused(roomId);
+};
+const isRoomConversationFocused = (roomId: number): boolean => {
+  if (isRoomFocused(roomId)) return true;
+  const peer = oneToOnePeerOfRoom(roomId);
+  return !!peer && isPeerFocused(peer);
+};
+
+/**
+ * 채팅창 focus 상태 변경 반영.
+ * focus가 된 순간(되거나 이미 focus 중이면) 안읽은 건수를 즉시 0으로 만든다.
+ * = "focus하는 순간 채팅목록 안읽은 건수가 사라진다"
+ * 같은 대화의 반대쪽 진입점(1:1 DM ↔ 1:1 방)도 함께 focus로 표시해
+ * 어느 창으로 열었든 양쪽 배지가 동시에 사라지게 한다.
+ */
+const setPeerFocus = (peer: string, focused: boolean) => {
+  if (!peer) return;
+  if (!focused) {
+    if (focusedPeers.value[peer]) delete focusedPeers.value[peer];
+    // 같은 대화의 1:1 방 표시도 함께 정리한다 (창이 닫혔으므로 보고 있는 중이 아니다)
+    const roomId = findOneToOneRoomId(peer);
+    if (roomId !== null && focusedRooms.value[roomId]) {
+      delete focusedRooms.value[roomId];
+    }
+    return;
+  }
+  focusedPeers.value[peer] = true;
+  clearUnread(peer);
+  const roomId = findOneToOneRoomId(peer);
+  if (roomId !== null) focusedRooms.value[roomId] = true;
+};
+
+const setRoomFocus = (roomId: number, focused: boolean) => {
+  if (!Number.isInteger(roomId)) return;
+  if (!focused) {
+    if (focusedRooms.value[roomId]) delete focusedRooms.value[roomId];
+    // 같은 대화의 DM 쪽 표시도 함께 정리한다
+    const peer = oneToOnePeerOfRoom(roomId);
+    if (peer && focusedPeers.value[peer]) delete focusedPeers.value[peer];
+    return;
+  }
+  focusedRooms.value[roomId] = true;
+  clearRoomUnread(roomId);
+  // 1:1 방이면 같은 대화를 보여주는 DM 쪽도 focus로 표시해 양쪽 배지를 함께 0으로 만든다
+  const peer = oneToOnePeerOfRoom(roomId);
+  if (peer) {
+    focusedPeers.value[peer] = true;
+    clearUnread(peer);
+  }
+};
+
+// 창이 닫혔을 때(chat-close/room-close) 남은 포커스 표시를 정리한다.
+// 같은 대화의 반대쪽 표시까지 정리해 닫힌 창이 "보고 있는 중"으로 남지 않게 한다.
+const forgetPeerFocus = (peer: string) => {
+  if (!peer) return;
+  if (focusedPeers.value[peer]) delete focusedPeers.value[peer];
+  const roomId = findOneToOneRoomId(peer);
+  if (roomId !== null && focusedRooms.value[roomId]) {
+    delete focusedRooms.value[roomId];
+  }
+};
+const forgetRoomFocus = (roomId: number) => {
+  if (!Number.isInteger(roomId)) return;
+  if (focusedRooms.value[roomId]) delete focusedRooms.value[roomId];
+  const peer = oneToOnePeerOfRoom(roomId);
+  if (peer && focusedPeers.value[peer]) delete focusedPeers.value[peer];
+};
+
 const ensureRoomBox = (roomId: number): Array<ChatMessage> => {
   if (!roomMessages.value[roomId]) {
     roomMessages.value[roomId] = [];
@@ -365,18 +454,41 @@ const handleIncoming = (raw: string) => {
         room[id] = Math.floor(n);
       }
     }
+    // 재접속으로 복원되는 값 중 "지금 보고 있는(포커스된) 대화"는 이미 읽은 것으로 본다.
+    // 복원 배열에서 먼저 빼고(아래에서 통째로 교체) 서버 DB에도 0으로 되돌린다.
+    Object.keys(dm).forEach((peer) => {
+      if (!isPeerConversationFocused(peer)) return;
+      delete dm[peer];
+      clearUnread(peer);
+    });
+    Object.keys(room).forEach((key) => {
+      const roomId = Number(key);
+      if (!isRoomConversationFocused(roomId)) return;
+      delete room[roomId];
+      clearRoomUnread(roomId);
+    });
     unreadCounts.value = dm;
     roomUnread.value = room;
   } else if (data.type === "unread_bump") {
     // 실시간 수신: 서버가 DB에 증가시켜 둔 값을 화면에 +1 반영한다.
+    // 단, 해당 대화가 focus 중이면 "보고 있는 중"이므로 건수를 올리지 않고 0으로 되돌린다.
+    // (서버에 unread_clear를 보내므로 DB도 0이 되어 재접속 시에도 배지가 안 살아난다)
     if (data.scope === "room") {
       const roomId = Number(data.target);
       if (Number.isInteger(roomId) && roomId > 0) {
+        if (isRoomConversationFocused(roomId)) {
+          clearRoomUnread(roomId);
+          return;
+        }
         roomUnread.value[roomId] = (roomUnread.value[roomId] ?? 0) + 1;
       }
     } else {
       const peer = String(data.target ?? "");
       if (peer) {
+        if (isPeerConversationFocused(peer)) {
+          clearUnread(peer);
+          return;
+        }
         unreadCounts.value[peer] = (unreadCounts.value[peer] ?? 0) + 1;
       }
     }
@@ -644,6 +756,9 @@ const disconnect = () => {
   roomMessages.value = {};
   roomUnread.value = {};
   roomMembers.value = {};
+  // 창들이 모두 닫히므로 "보고 있는 대화" 상태도 비운다.
+  focusedPeers.value = {};
+  focusedRooms.value = {};
 };
 
 /**
@@ -671,6 +786,17 @@ export function useChatSocket() {
     roomMembers,
     findOneToOneRoomId,
     oneToOnePeerOfRoom,
+    // 채팅창 focus 상태 (안읽은 건수를 잡지 않을 대상 판정용)
+    focusedPeers,
+    focusedRooms,
+    isPeerFocused,
+    isRoomFocused,
+    isPeerConversationFocused,
+    isRoomConversationFocused,
+    setPeerFocus,
+    setRoomFocus,
+    forgetPeerFocus,
+    forgetRoomFocus,
     connect,
     attemptReconnect,
     manualReconnect,
