@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { WebviewWindow as WebviewWindowInstance } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow, type CloseRequestedEvent } from "@tauri-apps/api/window";
 import type { MyStatus, RoomInfo } from "../types/chat";
 import { MY_STATUS_OPTIONS, roomRawName } from "../types/chat";
 import NicknameView from "../components/NicknameView.vue";
@@ -10,6 +11,7 @@ import UserListView from "../components/UserListView.vue";
 import RoomListView from "../components/RoomListView.vue";
 import CreateRoomModal from "../components/CreateRoomModal.vue";
 import RenameRoomModal from "../components/RenameRoomModal.vue";
+import CloseConfirmModal from "../components/CloseConfirmModal.vue";
 import { useChatSocket } from "../composables/useChatSocket";
 import {
   createChatBus,
@@ -94,6 +96,8 @@ const openRooms = new Set<number>();
 const seenBusMessages = new Set<string>();
 let bus: (ChatBus & { add: (bus: ChatBus | null) => void }) | null = null;
 let busClosed = false;
+// 메인 창 닫기 요청(Tauri onCloseRequested) 구독 해제 함수
+let unlistenCloseRequested: (() => void) | null = null;
 
 // 새 창 열기 실패 시 화면 상단에 보여줄 에러 메시지
 const windowError = ref("");
@@ -105,6 +109,15 @@ const showWindowError = (msg: string) => {
 const clearWindowError = () => {
   windowError.value = "";
 };
+
+// ─── 메인 창 종료 확인 ───
+// 열려 있는 채팅창이 있는 상태에서 메인 창을 닫으면, 채팅창을 먼저 닫아달라고 안내한다.
+// Tauri: 창 X/Alt+F4 → onCloseRequested 로 막는다.
+// 웹: 창을 닫기 직전(beforeunload)에 막는다(브라우저 기본 확인창 사용).
+const showCloseConfirm = ref(false);
+const openRoomCountForClose = ref(0);
+// '채팅창 닫고 종료'로 확인받은 뒤에는 재차 닫기 요청이 와도 가로막지 않는다.
+let allowMainClose = false;
 
 // 번호방: 새 창 열기 (웹 팝업 / Tauri WebviewWindow)
 // NOTE: 1:1 대화도 이 창을 쓴다(1:1 = 멤버 2명 방).
@@ -319,7 +332,71 @@ const handleLeave = () => {
   entered.value = false;
 };
 
-const handleMainUnload = () => {
+// ─── 메인 창 닫기 요청 ───
+// 열려 있는 채팅창이 있으면 닫지 않고, 채팅창을 먼저 닫아달라고 안내한다.
+// 웹에서는 창이 닫히기 직전(beforeunload)에만 확인할 수 있으므로 동기로 판단한다.
+
+// 웹 팝업(window.open) 중 아직 닫히지 않은 채팅창 개수
+const countOpenBrowserRoomWindows = (): number => {
+  let aliveCount = 0;
+  roomWindows.value.forEach((child) => {
+    if (child && !child.closed) aliveCount += 1;
+  });
+  return aliveCount;
+};
+
+/**
+ * 열려 있는 채팅창 개수를 센다.
+ * - Tauri: room_ 라벨을 가진 실제 윈도우를 조회한다(이미 닫힌 창은 걸러진다).
+ * - 웹: 팝업 핸들이 살아있는지로 판단한다.
+ */
+const countOpenRoomWindows = async (): Promise<number> => {
+  if (!isTauriRuntime()) return countOpenBrowserRoomWindows();
+  try {
+    const wins = await WebviewWindow.getAll();
+    const alive = wins.filter((w) => w.label.startsWith("room_"));
+    if (alive.length > 0) return alive.length;
+  } catch {
+    // 조회 실패 시 아래 캐시 기준으로 판단한다
+  }
+  return tauriRoomWindows.size;
+};
+
+// Tauri: 창 X(또는 Alt+F4)를 눌렀을 때. 열린 채팅창이 있으면 닫기를 막는다.
+const handleMainCloseRequested = async (event: CloseRequestedEvent) => {
+  if (allowMainClose) return;
+  const count = await countOpenRoomWindows();
+  if (count === 0) return;
+  event.preventDefault();
+  openRoomCountForClose.value = count;
+  showCloseConfirm.value = true;
+};
+
+const cancelMainClose = () => {
+  showCloseConfirm.value = false;
+};
+
+// 모달에서 '채팅창 닫고 종료'를 누른 경우: 열린 채팅창을 모두 닫고 메인 창도 닫는다.
+const confirmMainClose = async () => {
+  showCloseConfirm.value = false;
+  allowMainClose = true;
+  closeAllRoomWindows();
+  try {
+    await getCurrentWindow().close();
+  } catch {
+    // 닫기에 실패하면 다음번에 다시 확인 절차를 탄다
+    allowMainClose = false;
+  }
+};
+
+const handleMainUnload = (event: BeforeUnloadEvent) => {
+  // 웹에서는 Tauri의 onCloseRequested 가 없으므로 마지막Chance인 beforeunload 로 막는다.
+  // (브라우저 기본 확인창이 뜬다)
+  if (!isTauriRuntime() && !allowMainClose && countOpenBrowserRoomWindows() > 0) {
+    event.preventDefault();
+    event.returnValue = "메인 창을 닫으려면 열려 있는 채팅창을 먼저 닫아주세요.";
+    return;
+  }
   try {
     bus?.post({ kind: "main-closing", mainId });
   } catch {
@@ -402,6 +479,24 @@ onMounted(() => {
     // 무시 (BroadcastChannel 미지원 환경)
   }
   window.addEventListener("beforeunload", handleMainUnload);
+  if (isTauriRuntime()) {
+    // 창 X/Alt+F4 로 닫으려는 요청을 받아, 열린 채팅창이 있으면 막는다.
+    void getCurrentWindow()
+      .onCloseRequested((event) => handleMainCloseRequested(event))
+      .then((unlisten) => {
+        // 언마운트가 먼저 끝났으면 방금 등록한 구독을 즉시 해제한다.
+        if (busClosed) {
+          try {
+            unlisten();
+          } catch {
+            // 무시
+          }
+          return;
+        }
+        unlistenCloseRequested = unlisten;
+      })
+      .catch(() => undefined);
+  }
 
   // 새로고침해도 저장된 닉네임으로 자동 입장
   // (동일 탭 라우팅 복귀 시 기존 소켓이 살아있으면 재사용)
@@ -425,6 +520,12 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener("beforeunload", handleMainUnload);
+  try {
+    unlistenCloseRequested?.();
+  } catch {
+    // 무시
+  }
+  unlistenCloseRequested = null;
   busClosed = true;
   bus?.close();
   bus = null;
@@ -636,6 +737,14 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       @cancel="closeRenameModal"
     />
   </div>
+
+  <!-- 메인 창을 닫으려는데 열려 있는 채팅창이 있을 때 뜨는 안내 -->
+  <CloseConfirmModal
+    v-if="showCloseConfirm"
+    :open-room-count="openRoomCountForClose"
+    @confirm="confirmMainClose"
+    @cancel="cancelMainClose"
+  />
 
   <!-- 새 창 열기 실패 시 원인 표시 (Tauri 권한 문제 등) -->
   <div v-if="windowError" class="window-error" @click="clearWindowError">
