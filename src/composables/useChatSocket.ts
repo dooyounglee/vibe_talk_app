@@ -1,6 +1,7 @@
 import { ref } from "vue";
-import type { ChatMessage, RoomInfo } from "../types/chat";
-import { ROOM_TITLE_INPUT_MAX_LENGTH } from "../types/chat";
+import type { ChatMessage, MyStatus, RoomInfo } from "../types/chat";
+import { DEFAULT_MY_STATUS, ROOM_TITLE_INPUT_MAX_LENGTH, normalizeMyStatus } from "../types/chat";
+import { MY_STATUS_STORAGE_KEY } from "../constants";
 
 // ─── 모듈 싱글톤 상태 ───
 // 같은 윈도우(JS 컨텍스트) 안에서는 하나의 WebSocket만 유지한다.
@@ -10,6 +11,32 @@ import { ROOM_TITLE_INPUT_MAX_LENGTH } from "../types/chat";
 // NOTE: 1:1 대화도 "멤버 2명 방"으로만 표현한다. 별도의 DM 상태/경로는 두지 않는다.
 const isConnected = ref(false);
 const nickname = ref("");
+
+// ─── 내 상태 (접속/오프라인/회의중/바쁨/자리비움) ───
+// 메인 화면 상단 드롭다운에서 고른 값.
+// 서버로 보내지 않으므로 다른 사람에게는 보이지 않고, 이 브라우저에만 남긴다.
+// (기존 localStorage 사용처와 동일한 이유로 서버 미사용)
+// localStorage 접근은 사용자가 저장을 막은 환경에서 예외가 날 수 있어 전부 try/catch로 감싼다.
+const loadMyStatus = (): MyStatus => {
+  try {
+    const saved = localStorage.getItem(MY_STATUS_STORAGE_KEY);
+    return normalizeMyStatus(saved);
+  } catch {
+    return DEFAULT_MY_STATUS;
+  }
+};
+const myStatus = ref<MyStatus>(loadMyStatus());
+
+/** 내 상태 변경: 화면 상태를 갱신하고 이 브라우저에 저장한다(서버 전송 없음) */
+const setMyStatus = (value: MyStatus) => {
+  const next = normalizeMyStatus(value);
+  myStatus.value = next;
+  try {
+    localStorage.setItem(MY_STATUS_STORAGE_KEY, next);
+  } catch {
+    // 저장 실패(저장 차단 환경 등)는 무시한다. 화면 반영만으로 동작은 충분하다.
+  }
+};
 // userlist: DB 등록 사용자 전체 (탈퇴 제외, 본인 제외) — '사용자' 탭에 표시
 const userlist = ref<Array<string>>([]);
 // onlineUsers: 현재 접속중 닉네임 집합 (초록점/오프라인 구분용)
@@ -787,6 +814,8 @@ export function useChatSocket() {
     nickname,
     isConnected,
     connectionStatus,
+    myStatus,
+    setMyStatus,
     userlist,
     onlineUsers,
     usersDetail,

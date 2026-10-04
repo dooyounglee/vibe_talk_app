@@ -3,8 +3,8 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { WebviewWindow as WebviewWindowInstance } from "@tauri-apps/api/webviewWindow";
-import type { RoomInfo } from "../types/chat";
-import { roomRawName } from "../types/chat";
+import type { MyStatus, RoomInfo } from "../types/chat";
+import { MY_STATUS_OPTIONS, roomRawName } from "../types/chat";
 import NicknameView from "../components/NicknameView.vue";
 import UserListView from "../components/UserListView.vue";
 import RoomListView from "../components/RoomListView.vue";
@@ -30,6 +30,8 @@ const {
   nickname,
   isConnected,
   connectionStatus,
+  myStatus,
+  setMyStatus,
   userlist,
   onlineUsers,
   usersDetail,
@@ -552,6 +554,21 @@ const visibleRooms = computed<RoomInfo[]>(() =>
         <div class="status">{{ connectionStatus }}</div>
       </div>
       <div class="header-buttons">
+        <!-- 내 상태: 닉네임 오른쪽(=나가기 버튼 왼쪽) 드롭다운.
+             서버로 보내지 않고 이 브라우저에만 저장되므로 다른 사람에게는 보이지 않는다. -->
+        <label class="status-select-wrap" title="내 상태 (이 브라우저에만 저장됩니다)">
+          <span class="status-select-label">내 상태</span>
+          <select
+            class="status-select"
+            :class="myStatus"
+            :value="myStatus"
+            @change="setMyStatus(($event.target as HTMLSelectElement).value as MyStatus)"
+          >
+            <option v-for="opt in MY_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+        </label>
         <button
           v-if="connectionStatus.includes('끊김')"
           class="small-btn primary"
@@ -649,7 +666,25 @@ const visibleRooms = computed<RoomInfo[]>(() =>
 }
 .me { font-size: 15px; }
 .status { font-size: 12px; color: #666; margin-top: 4px; }
-.header-buttons { display: flex; gap: 8px; }
+.header-buttons { display: flex; gap: 8px; align-items: center; }
+/* 내 상태 드롭다운: 라벨 + 상태별 색(select는 상태값을 class로 받아 색을 바꾼다) */
+.status-select-wrap { display: flex; align-items: center; gap: 6px; }
+.status-select-label { font-size: 12px; color: #666; white-space: nowrap; }
+.status-select {
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: sans-serif;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+}
+.status-select.online { color: #1a7f37; border-color: #b7dfc4; }
+.status-select.offline { color: #888; border-color: #ddd; }
+.status-select.meeting { color: #b3261e; border-color: #f0b8b4; }
+.status-select.busy { color: #b25e00; border-color: #f2d0a8; }
+.status-select.away { color: #7a5c00; border-color: #e6d79a; }
 .small-btn {
   padding: 6px 12px; font-size: 13px;
   border: 1px solid #ddd; border-radius: 6px;

@@ -31,7 +31,39 @@ export interface RoomInfo {
   lastMessageSender?: string | null;
 }
 
-/** 화면에 보여줄 방 제목 최대 글자 수 (초과분은 "..."로 생략) */
+// ─── 내 상태 (접속/오프라인/회의중/바쁨/자리비움) ───
+// 메인 화면 상단 드롭다운에서 고른다.
+// 서버로 보내지 않으므로 다른 사람에게는 보이지 않고, 이 기기에만 저장된다.
+export type MyStatus = "online" | "offline" | "meeting" | "busy" | "away";
+
+export const DEFAULT_MY_STATUS: MyStatus = "online";
+
+/** 드롭다운에 노출할 상태 목록 (표시 순서 그대로) */
+export const MY_STATUS_OPTIONS: ReadonlyArray<{ value: MyStatus; label: string }> = [
+  { value: "online", label: "접속" },
+  { value: "offline", label: "오프라인" },
+  { value: "meeting", label: "회의중" },
+  { value: "busy", label: "바쁨" },
+  { value: "away", label: "자리비움" },
+];
+
+/**
+ * 저장된 값을 유효한 상태로 정규화한다.
+ * localStorage에는 문자열이 들어오므로(또는 예전 값/손상 값일 수 있으므로)
+ * 목록에 없는 값이면 기본값으로 되돌린다. 덕분에 select에 없는 값이 선택되는 일이 없다.
+ */
+export function normalizeMyStatus(value: unknown): MyStatus {
+  const hit = MY_STATUS_OPTIONS.find((o) => o.value === value);
+  return hit ? hit.value : DEFAULT_MY_STATUS;
+}
+
+/** 상태 값 → 화면에 보여줄 라벨 (드롭다운 기본값 표기 등) */
+export function myStatusLabel(value: unknown): string {
+  const v = normalizeMyStatus(value);
+  return MY_STATUS_OPTIONS.find((o) => o.value === v)?.label ?? DEFAULT_MY_STATUS;
+}
+
+/** 화면 표기: 방 제목 최대 글자 수 (초과분은 "..."로 생략) */
 export const ROOM_TITLE_MAX_LENGTH = 20;
 
 /** 방제목 수정 시 입력받을 수 있는 최대 글자 수 (서버 저장 제한과 동일) */
