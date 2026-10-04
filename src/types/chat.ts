@@ -4,6 +4,10 @@ export interface ChatMessage {
   text: string;
   timestamp?: number;
   roomId?: number;
+  /** 서버 messages.id — 읽음 표시(카톡식 '1'/'4') 계산 기준 */
+  msgId?: number;
+  /** 이 메시지를 아직 안 읽은 사람 수 (카톡의 메시지별 숫자). 0이면 표시하지 않는다 */
+  unreadCount?: number;
 }
 
 export interface RoomInfo {

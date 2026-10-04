@@ -65,16 +65,25 @@ watch(
         <div
           v-for="(msg, index) in messages"
           :key="index"
-          :class="{
-            'message-self': msg.nickname === myNickname,
-            'message-other': msg.nickname !== myNickname,
-          }"
+          class="message-row"
+          :class="msg.nickname === myNickname ? 'row-self' : 'row-other'"
         >
-          <div class="message-content">
-            <span class="nickname" v-if="msg.nickname !== myNickname">
-              [{{ msg.nickname }}]
-            </span>
-            {{ msg.text }}
+          <!-- 카톡식 읽음 표시: 내가 보낸 메시지이고 아직 안 읽은 사람이 있을 때만 숫자를 붙인다 -->
+          <span
+            v-if="msg.nickname === myNickname && (msg.unreadCount ?? 0) > 0"
+            class="unread-count"
+            :title="`${msg.unreadCount}명이 아직 읽지 않았습니다`"
+          >{{ msg.unreadCount }}</span>
+          <div
+            class="bubble"
+            :class="msg.nickname === myNickname ? 'message-self' : 'message-other'"
+          >
+            <div class="message-content">
+              <span class="nickname" v-if="msg.nickname !== myNickname">
+                [{{ msg.nickname }}]
+              </span>
+              {{ msg.text }}
+            </div>
           </div>
         </div>
       </div>
@@ -144,20 +153,37 @@ watch(
   font-size: 13px;
   text-align: center;
 }
+/* 한 줄(숫자 + 풍선)을 감싸는 행 — 내 줄은 오른쪽, 상대 줄은 왼쪽 */
+.message-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  max-width: 75%;
+}
+.row-self { align-self: flex-end; flex-direction: row; }
+.row-other { align-self: flex-start; }
+/* 상대 메시지는 숫자 없이 풍선만 */
 .message-self {
-  align-self: flex-end;
   background: #d1e7dd;
   padding: 8px 12px;
   border-radius: 14px;
-  max-width: 75%;
+  color: #000;
 }
 .message-other {
-  align-self: flex-start;
   background: #fff;
   padding: 8px 12px;
   border-radius: 14px;
-  max-width: 75%;
   border: 1px solid #eee;
+  color: #000;
+}
+/* 숫자 뱃지: 작고 흐린 회색 (카톡의 '1' 느낌) */
+.unread-count {
+  color: #999;
+  font-size: 11px;
+  line-height: 1;
+  padding-bottom: 3px;
+  flex-shrink: 0;
+  user-select: none;
 }
 .message-content {
   word-break: break-word;

@@ -229,6 +229,10 @@ interface HistoryEntry {
   nickname?: string;
   text?: string;
   timestamp?: number;
+  /** 읽음 표시(카톡식 숫자) 계산용 서버 메시지 id */
+  msgId?: number;
+  /** 이 메시지를 아직 안 읽은 사람 수 (0 이면 표시하지 않음) */
+  unreadCount?: number;
 }
 
 interface IncomingPayload {
@@ -256,6 +260,11 @@ interface IncomingPayload {
   unread?: { dm: Record<string, number>; room: Record<string, number> };
   scope?: string;
   target?: string;
+  // 읽음 표시 (카톡식 메시지별 숫자)
+  msgId?: number;
+  unreadCount?: number;
+  // read_ack: 그 대화의 참여자별 마지막 읽음 위치
+  cursors?: Record<string, number>;
 }
 
 const pruneRooms = () => {
@@ -282,6 +291,9 @@ const handleIncoming = (raw: string) => {
       text: String(data.text ?? ""),
       timestamp:
         typeof data.timestamp === "number" ? data.timestamp : Date.now(),
+      msgId: typeof data.msgId === "number" ? data.msgId : undefined,
+      unreadCount:
+        typeof data.unreadCount === "number" ? data.unreadCount : 0,
     };
     pushDm(peer, formattedMessage);
   } else if (data.type === "userlist") {
@@ -342,6 +354,9 @@ const handleIncoming = (raw: string) => {
       nickname: String(msg?.nickname ?? withUser),
       text: String(msg?.text ?? ""),
       timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
+      msgId: typeof msg?.msgId === "number" ? msg.msgId : undefined,
+      unreadCount:
+        typeof msg?.unreadCount === "number" ? msg.unreadCount : 0,
     }));
     // 채팅창을 열 때마다 서버가 보내는 DB 최신 내역(10건)으로 박스를 덮어쓴다.
     dmMessages.value[withUser] = history;
@@ -380,6 +395,9 @@ const handleIncoming = (raw: string) => {
       text: String(msg?.text ?? ""),
       timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
       roomId,
+      msgId: typeof msg?.msgId === "number" ? msg.msgId : undefined,
+      unreadCount:
+        typeof msg?.unreadCount === "number" ? msg.unreadCount : 0,
     }));
     // NOTE: 채팅창을 열 때마다 서버가 보내는 DB 최신 내역(10건)으로 항상 덮어쓴다.
     // (접속 시 일괄 푸시 제거 + 창 열람 시 새로 조회)
@@ -394,6 +412,9 @@ const handleIncoming = (raw: string) => {
       text: String(data.text ?? ""),
       timestamp: typeof data.timestamp === "number" ? data.timestamp : Date.now(),
       roomId,
+      msgId: typeof data.msgId === "number" ? data.msgId : undefined,
+      unreadCount:
+        typeof data.unreadCount === "number" ? data.unreadCount : 0,
     };
     ensureRoomBox(roomId).push(msg);
     // 안읽은 건수는 서버 신호(unread_bump)가 진실이므로 여기서 증가시키지 않는다.
@@ -492,7 +513,81 @@ const handleIncoming = (raw: string) => {
         unreadCounts.value[peer] = (unreadCounts.value[peer] ?? 0) + 1;
       }
     }
+  } else if (data.type === "read_ack") {
+    // 카톡식 읽음 숫자의 실시간 갱신.
+    // 누군가 대화를 읽으면 서버가 그 대화의 최신 커서 맵을 보내고,
+    // 우리는 이미 화면에 있는 메시지 중 "내 메시지"의 숫자만 다시 계산한다.
+    applyReadAck(data.scope, String(data.target ?? ""), data.cursors);
   }
+};
+
+/** read_ack 이 실어 온 커서 맵을 파싱 ({닉네임: lastReadId}) */
+const parseCursors = (raw: unknown): Record<string, number> => {
+  const out: Record<string, number> = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [nick, value] of Object.entries(raw as Record<string, unknown>)) {
+    const n = Number(value);
+    if (nick && Number.isFinite(n)) out[nick] = Math.max(0, Math.floor(n));
+  }
+  return out;
+};
+
+/**
+ * 읽음 커서(각 사용자가 어디까지 읽었는지)로 안읽은 사람 수를 다시 계산한다.
+ * 발신자 자신은 세지 않고, 커서가 메시지 id 보다 작은 사람만 센다.
+ * (서버 db.js 의 countUnreadForMessage 와 같은 규칙 — 규칙이 달라지면 숫자가 어긋난다)
+ */
+const countUnread = (
+  cursors: Record<string, number>,
+  participants: Array<string>,
+  sender: string,
+  msgId?: number,
+): number => {
+  const id = typeof msgId === "number" ? msgId : 0;
+  if (!id) return 0;
+  let n = 0;
+  for (const raw of participants) {
+    const nick = String(raw ?? "").trim();
+    if (!nick || nick === sender) continue;
+    if ((cursors[nick] ?? 0) < id) n += 1;
+  }
+  return n;
+};
+
+/**
+ * read_ack 처리: 해당 대화 박스의 내 메시지 숫자를 갱신한다.
+ * 읽음이 반영되면 숫자는 줄기만 하므로(단조 감소) 그대로 덮어써도 안전하다.
+ */
+const applyReadAck = (
+  scope: unknown,
+  target: string,
+  rawCursors: unknown,
+) => {
+  if (!target) return;
+  const cursors = parseCursors(rawCursors);
+  const me = nickname.value.trim();
+  if (scope === "room") {
+    const roomId = Number(target);
+    if (!Number.isInteger(roomId)) return;
+    const box = roomMessages.value[roomId];
+    if (!box) return;
+    const members = roomMembers.value[roomId] ?? [];
+    box.forEach((m) => {
+      if (m.nickname !== me) return; // 내 메시지만 갱신
+      m.unreadCount = countUnread(cursors, members, m.nickname, m.msgId);
+    });
+    return;
+  }
+  // dm: target 은 서버가 정규화한 대화 키("A|B"). DM 창 박스를 찾아 갱신한다.
+  const key = target.split("|");
+  const peer = key.find((n) => n && n.trim() !== me) ?? "";
+  if (!peer) return;
+  const box = dmMessages.value[peer];
+  if (!box) return;
+  box.forEach((m) => {
+    if (m.nickname !== me) return;
+    m.unreadCount = countUnread(cursors, key, m.nickname, m.msgId);
+  });
 };
 
 const attachHandlers = (socket: WebSocket) => {
