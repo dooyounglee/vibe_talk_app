@@ -69,10 +69,11 @@ watch(
           :class="msg.nickname === myNickname ? 'row-self' : 'row-other'"
         >
           <!-- 카톡식 읽음 표시: 아직 안 읽은 사람이 있으면 숫자를 붙인다.
-               내 메시지(message-self)와 상대 메시지(message-other) 모두 붙고,
-               숫자는 '발신자 + 지금 화면을 보는 나(열람자)'를 제외한 미열람 인원이다.
-               예) 3명 방에서 A 발신 → B 열람, C 미열람
-                   A 화면 '1'(C), B 화면도 A 의 메시지 옆에 '1'(C) -->
+               내 메시지(message-self)와 상대 메시지(message-other) 모두 붙는다.
+               발신자를 제외한 미열람 인원이며, blur 중이면 '나'도 세어진다.
+               (focus 하면 unread_clear → 읽음 커서가 앞서므로 자동으로 빠진다)
+               예) 3명 방에서 A 발신 → B 채팅창 blur, C 미열람
+                   A/B 화면 '2'  →  B가 focus 하면 양쪽 '1' -->
           <span
             v-if="(msg.unreadCount ?? 0) > 0"
             class="unread-count"

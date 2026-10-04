@@ -8,9 +8,10 @@ export interface ChatMessage {
   msgId?: number;
   /**
    * 이 메시지를 아직 안 읽은 사람 수 (카톡의 메시지별 숫자). 0이면 표시하지 않는다.
-   * 발신자와 "지금 이 화면을 보는 사람(열람자)"은 제외한 미열람 인원이라
+   * 발신자만 제외하고 센다. 즉 blur 상태면 '나'도 포함되고,
+   * focus 해서 읽음 처리(unread_clear)되면 커서가 앞서므로 자동으로 빠진다.
+   * 예) 3명 방에서 A 발신 → B 채팅창 blur, C 미열람: A/B 화면 모두 '2' → B focus 후 '1'
    * 내 메시지(message-self)와 상대 메시지(message-other) 모두에 붙는다.
-   * 예) 3명 방에서 A 발신 → B가 열람, C가 미열람 이면 A 화면과 B 화면 모두 '1'
    */
   unreadCount?: number;
 }

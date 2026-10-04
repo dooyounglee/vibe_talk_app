@@ -233,7 +233,7 @@ interface HistoryEntry {
   msgId?: number;
   /** 서버가 함께 내려주는 원본 id (구버전 payload 호환용) */
   id?: number;
-  /** 이 메시지를 아직 안 읽은 사람 수 (0 이면 표시하지 않음). 발신자·열람자는 제외 */
+  /** 이 메시지를 아직 안 읽은 사람 수 (0 이면 표시하지 않음). 발신자만 제외하고 센다 */
   unreadCount?: number;
 }
 
@@ -556,14 +556,13 @@ const parseCursors = (raw: unknown): Record<string, number> => {
 
 /**
  * 읽음 커서(각 사용자가 어디까지 읽었는지)로 안 읽은 사람 수를 다시 계산한다.
- * 발신자 자신과 '지금 이 화면을 보는 사람(나)'은 세지 않고,
- * 커서가 메시지 id 보다 작은 사람만 센다.
+ * 발신자 자신은 세지 않고, 커서가 메시지 id 보다 작은 사람만 센다.
  * (서버 db.js 의 countUnreadForMessage 와 같은 규칙 — 규칙이 달라지면 숫자가 어긋난다)
  *
- * 자기 메시지일 때는 viewer 가 곧 발신자라 '상대 미열람 수'와 같아지고,
- * 상대 메시지(message-other)일 때는 '나를 뺀 남은 미열람 수'가 된다.
- *   예) 3명 방에서 A 발신 → B 가 열람, C 는 미열람
- *       A 화면(발신자이자 viewer) '1', B 화면(상대 메시지, viewer=나) '1'
+ * '지금 보고 있는 나'를 따로 빼지 않는다. 읽음 커서가 그 역할을 대신한다.
+ *   - focus 상태: focus 시 unread_clear 를 보내 커서가 이미 앞서 있어 자동으로 빠진다.
+ *   - blur 상태 : 커서가 뒤처져 그대로 집계된다. (안 읽었으니 세는 게 맞다)
+ *   예) 3명 방에서 A 발신 → B 채팅창 blur, C 미열람 → 양쪽 화면 '2' → B focus → '1'
  *
  * msgId 를 모르면(구버전 서버/필드 누락) 숫자를 셀 수 없다.
  * 이때 0 을 돌려주면 "안 읽은 사람 있음 → 0" 으로 잘못 덮어써져 숫자가 한 번에 사라진다.
@@ -574,15 +573,13 @@ const countUnread = (
   participants: Array<string>,
   sender: string,
   msgId?: number,
-  viewer?: string,
 ): number | null => {
   const id = typeof msgId === "number" ? msgId : 0;
   if (!id) return null;
-  const me = String(viewer ?? "").trim();
   let n = 0;
   for (const raw of participants) {
     const nick = String(raw ?? "").trim();
-    if (!nick || nick === sender || nick === me) continue;
+    if (!nick || nick === sender) continue;
     if ((cursors[nick] ?? 0) < id) n += 1;
   }
   return n;
@@ -592,8 +589,8 @@ const countUnread = (
  * read_ack 처리: 해당 대화 박스의 메시지 숫자를 갱신한다.
  * 카톡식 읽음 숫자는 내 메시지뿐 아니라 상대 메시지(message-other)에도 붙으므로
  * 박스 안의 모든 메시지를 다시 계산한다.
- *   - 내 메시지   : 상대가 안 읽은 인원 (viewer 가 곧 발신자라 자동으로 빠짐)
- *   - 상대 메시지 : '나'를 뺀 남은 미열람 인원 (예: 3명 방, 내가 읽었고 C 만 안 읽음 → 1)
+ *   - 내 메시지   : 상대가 안 읽은 인원
+ *   - 상대 메시지 : 아직 안 읽은 인원 (blur 중이면 '나'도 포함 → focus 하면 빠진다)
  * 읽음이 반영되면 숫자는 줄기만 하므로(단조 감소) 그대로 덮어써도 안전하다.
  *
  * 단, 계산에 필요한 값(참여자 목록 / 메시지 id)이 없으면 기존 숫자를 그대로 둔다.
@@ -625,8 +622,8 @@ const applyReadAck = (
     if (members.length === 0) return;
     box.forEach((m) => {
       // 내 메시지뿐 아니라 상대 메시지(message-other)도 갱신한다.
-      // countUnread 안에서 발신자와 '나(viewer)'가 자동으로 제외된다.
-      const next = countUnread(cursors, members, m.nickname, m.msgId, me);
+      // (상대 메시지 옆 숫자가 실시간으로 줄어들어야 한다)
+      const next = countUnread(cursors, members, m.nickname, m.msgId);
       if (next === null) return; // id 모르면 기존 값 유지
       m.unreadCount = next;
     });
@@ -645,8 +642,8 @@ const applyReadAck = (
   const members = dmMembers.length > 0 ? dmMembers : key;
   if (members.length === 0) return;
   box.forEach((m) => {
-    // DM 박스도 상대 메시지까지 함께 갱신한다 (1:1 이면 결과는 항상 0).
-    const next = countUnread(cursors, members, m.nickname, m.msgId, me);
+    // DM 박스도 상대 메시지까지 함께 갱신한다.
+    const next = countUnread(cursors, members, m.nickname, m.msgId);
     if (next === null) return;
     m.unreadCount = next;
   });
