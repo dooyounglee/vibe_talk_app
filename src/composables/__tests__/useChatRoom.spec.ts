@@ -93,11 +93,9 @@ describe("useChatRoom — 새 창 (버스 모드)", () => {
     channel.close();
   });
 
-  // 알려진 문제: useWindowFocus의 첫 보고가 버스 생성(useChatRoom의 onMounted)보다 먼저 일어나
-  // bus가 null이라 버려진다. 메인 창이 main-ready를 다시 보내기 전까지는 focus 중인 새 창도
-  // 메인 창에서는 focus가 아닌 것으로 보여 안읽은 건수가 올라간다.
-  // 고치면 이 테스트가 통과하므로 it.fails를 it으로 바꾼다.
-  it.fails("열리자마자 focus 상태를 메인 창에 알린다", async () => {
+  // 회귀 방지: useWindowFocus의 첫 보고는 버스 생성보다 먼저 일어나므로,
+  // 버스를 만든 뒤 focus 상태를 다시 보내지 않으면 메인 창이 이 창을 focus 아님으로 본다.
+  it("열리자마자 focus 상태를 메인 창에 알린다", async () => {
     const { channel, received } = openMainChannel();
     await mountRoom(3);
     await vi.waitFor(
@@ -105,6 +103,17 @@ describe("useChatRoom — 새 창 (버스 모드)", () => {
         expect(received).toContainEqual({ kind: "room-focus", roomId: 3, focused: true, mainId: "main-1" }),
       { timeout: 500 },
     );
+    channel.close();
+  });
+
+  it("focus 없이 열리면 focused: false를 알린다", async () => {
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    const { channel, received } = openMainChannel();
+    await mountRoom(3);
+    await vi.waitFor(() =>
+      expect(received).toContainEqual({ kind: "room-focus", roomId: 3, focused: false, mainId: "main-1" }),
+    );
+    expect(received).not.toContainEqual(expect.objectContaining({ kind: "room-focus", focused: true }));
     channel.close();
   });
 

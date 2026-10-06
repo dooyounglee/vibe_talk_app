@@ -219,10 +219,14 @@ export function useChatRoom(roomId: { readonly value: number }) {
           }
           bus?.add(created);
           announceOpen();
+          announceFocus();
         })
         .catch(() => undefined);
     }
     announceOpen();
+    // useWindowFocus의 첫 보고는 이 onMounted보다 먼저 실행되어 bus가 없을 때 버려진다.
+    // 버스가 생긴 지금 현재 focus 상태를 다시 알려, 열자마자 보고 있는 방에 배지가 잡히지 않게 한다.
+    announceFocus();
     stopAnnounceTimer();
     announceTimer = setInterval(() => {
       if (linked.value || busClosed) {
