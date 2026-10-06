@@ -39,6 +39,9 @@ const displayUsers = computed(() => {
 // 검색어가 있으면 컴포넌트가 돌려준 searchResults를, 없으면 전체 목록을 정렬해 보여준다.
 const searchKeyword = ref("");
 const searchResults = ref<ChatUser[]>([]);
+// ─── 상태 조회조건 (드롭다운, 기본 '전체') ───
+// searchKeyword와 같은 "반응형 ref" 패턴 → 목록이 갱신돼도 조회조건이 유지된다.
+const statusFilter = ref<"all" | MyStatus>("all");
 type DisplayUser = (typeof displayUsers.value)[number];
 const sortedUsers = computed<DisplayUser[]>(() => {
   // 컴포넌트는 displayUsers를 복제하지 않고 동일 객체를 걸러 돌려주므로
@@ -46,7 +49,10 @@ const sortedUsers = computed<DisplayUser[]>(() => {
   const base: DisplayUser[] = searchKeyword.value
     ? (searchResults.value as DisplayUser[])
     : displayUsers.value;
-  return [...base].sort((a, b) => a.nickname.localeCompare(b.nickname));
+  // filter가 새 배열을 만들므로 base는 변형되지 않는다 → 뒤의 sort 안전
+  return base
+    .filter((u) => statusFilter.value === "all" || statusOf(u.user_no) === statusFilter.value)
+    .sort((a, b) => a.nickname.localeCompare(b.nickname));
 });
 
 // ─── 사용자 상태 (이모티콘/상태문구) ───
@@ -191,12 +197,29 @@ const confirmRenameModal = () => {
       v-model:keyword="searchKeyword"
       v-model:results="searchResults"
       :users="displayUsers"
-    />
+    >
+      <template #after>
+        <!-- 상태 조회조건: 라벨 없이 드롭다운만 (검색 input 오른쪽) -->
+        <select
+          v-model="statusFilter"
+          class="status-filter"
+          title="상태 조회조건"
+        >
+          <option value="all">전체</option>
+          <option v-for="opt in MY_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
+            {{ opt.label }}
+          </option>
+        </select>
+      </template>
+    </UserSearchInput>
     <p v-if="upsertResult" class="error">{{ upsertResult }}</p>
     <p v-if="renameResult" class="error">{{ renameResult }}</p>
-    <p v-if="!searchKeyword && sortedUsers.length === 0" class="empty">등록된 다른 사용자가 없습니다.</p>
+    <p v-if="!searchKeyword && statusFilter === 'all' && sortedUsers.length === 0" class="empty">등록된 다른 사용자가 없습니다.</p>
     <p v-else-if="searchKeyword && sortedUsers.length === 0" class="empty">
       "{{ searchKeyword }}" 검색 결과가 없습니다.
+    </p>
+    <p v-else-if="statusFilter !== 'all' && sortedUsers.length === 0" class="empty">
+      상태에 해당하는 사용자가 없습니다.
     </p>
     <ul class="user-list">
       <li
@@ -346,6 +369,18 @@ const confirmRenameModal = () => {
   color: #888;
   font-size: 14px;
 }
+/* 상태 조회조건 드롭다운: 검색 input(flex: 1) 오른쪽에 고정 */
+.status-filter {
+  flex-shrink: 0;
+  padding: 7px 6px;
+  font-size: 13px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+}
+.status-filter:focus { outline: none; border-color: #007bff; }
 .user-list {
   list-style: none;
   margin: 0;
@@ -390,7 +425,7 @@ const confirmRenameModal = () => {
   height: auto;
   background: none;
   border-radius: 0;
-  font-size: 11px;
+  font-size: 16px;
   line-height: 1;
   flex-shrink: 0;
 }

@@ -64,6 +64,7 @@ onMounted(() => inputRef.value?.focus());
     >
       ×
     </button>
+    <slot name="after" /><!-- 상태 드롭다운 등 외부 콘텐츠 위치 -->
   </div>
 </template>
 
