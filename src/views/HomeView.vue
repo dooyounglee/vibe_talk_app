@@ -8,6 +8,7 @@ import type { ChatUser, MyStatus, RoomInfo } from "../types/chat";
 import { MY_STATUS_OPTIONS, myStatusText, roomRawName } from "../types/chat";
 import NicknameView from "../components/NicknameView.vue";
 import UserListView from "../components/UserListView.vue";
+import SettingsView from "../components/SettingsView.vue";
 import RoomListView from "../components/RoomListView.vue";
 import CreateRoomModal from "../components/CreateRoomModal.vue";
 import RenameRoomModal from "../components/RenameRoomModal.vue";
@@ -40,6 +41,9 @@ const {
   onlineUsers,
   userStatuses,
   usersDetail,
+  depts,
+  deptUpsertResult,
+  upsertDept,
   joinError,
   userUpsertResult,
   userRenameResult,
@@ -92,7 +96,7 @@ const isTauriChatWindow = currentRoomIdFromUrl() !== null;
 // 화면 상태: false = 1번 화면(닉네임 입력), true = 2번 화면(방 목록 + 사용자 목록)
 const entered = ref(false);
 // 메인 화면 탭: 'rooms' = 내 채팅방, 'users' = 사용자(1:1 시작점, DB 등록 전체/탈퇴 제외)
-const mainTab = ref<"rooms" | "users">("rooms");
+const mainTab = ref<"rooms" | "users" | "settings">("rooms");
 // 방별 채팅창 (웹: window.open 팝업 핸들 / Tauri: WebviewWindow)
 // 1:1 대화도 이 방 창을 쓴다.
 const roomWindows = ref(new Map<number, Window | null>());
@@ -662,8 +666,9 @@ const handleUpsertUser = (payload: {
   phone: string | null;
   userName: string | null;
   isDeleted: boolean;
+  deptNo: number | null;
 }) => {
-  upsertUser(payload.loginId, payload.nickname, payload.isDeleted, payload.phone, payload.userName);
+  upsertUser(payload.loginId, payload.nickname, payload.isDeleted, payload.phone, payload.userName, payload.deptNo);
 };
 
 // ─── 닉네임 변경 (본인 + admin) ───
@@ -754,6 +759,9 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       <button :class="{ active: mainTab === 'users' }" @click="mainTab = 'users'">
         사용자 ({{ userlist.length }})
       </button>
+      <button v-if="isAdmin()" :class="{ active: mainTab === 'settings' }" @click="mainTab = 'settings'">
+        설정
+      </button>
     </div>
     <RoomListView
       v-if="mainTab === 'rooms'"
@@ -769,6 +777,13 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       @invite-room="(id) => openInviteModal(id)"
       @refresh="() => refreshRooms()"
     />
+    <SettingsView
+      v-else-if="mainTab === 'settings' && isAdmin()"
+      :depts="depts"
+      :dept-upsert-result="deptUpsertResult"
+      :is-connected="isConnected"
+      @upsert-dept="upsertDept"
+    />
     <UserListView
       v-else
       :my-user-no="myUserNo"
@@ -780,6 +795,7 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       :is-connected="isConnected"
       :is-admin="isAdmin()"
       :users-detail="usersDetail"
+      :depts="depts"
       :upsert-result="userUpsertResult"
       :rename-result="userRenameResult"
       @open-chat="handleOpenChat"

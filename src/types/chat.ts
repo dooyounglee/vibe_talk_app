@@ -22,6 +22,17 @@ export interface ChatUser {
   nickname: string;
 }
 
+/** 부서 (admin 설정 > 부서관리). isDeleted = 미사용 */
+export interface Department {
+  deptNo: number;
+  deptCode: string;
+  deptName: string;
+  sortOrder: number;
+  isDeleted: boolean;
+  /** 활성 사용자 기준 소속 인원 수 */
+  memberCount: number;
+}
+
 export interface RoomInfo {
   roomId: number;
   name: string;

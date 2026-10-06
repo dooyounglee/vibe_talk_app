@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import { MY_STATUS_EMOJI, MY_STATUS_OPTIONS, myStatusText } from "../types/chat";
-import type { ChatUser, MyStatus } from "../types/chat";
+import type { ChatUser, Department, MyStatus } from "../types/chat";
 import type { UserDetail } from "../composables/useChatSocket";
 import UserSearchInput from "./UserSearchInput.vue";
 
@@ -16,6 +16,8 @@ const props = defineProps<{
   isConnected: boolean;
   isAdmin: boolean;
   usersDetail: UserDetail[];
+  /** 부서 목록 (admin 전용, 미사용 포함) */
+  depts: Department[];
   upsertResult: string;
   renameResult: string;
 }>();
@@ -25,7 +27,7 @@ const emit = defineEmits<{
   (e: "create-room-with", user: ChatUser): void;
   (e: "reconnect"): void;
   (e: "disconnect"): void;
-  (e: "upsert-user", payload: { loginId: string; nickname: string; phone: string | null; userName: string | null; isDeleted: boolean }): void;
+  (e: "upsert-user", payload: { loginId: string; nickname: string; phone: string | null; userName: string | null; isDeleted: boolean; deptNo: number | null }): void;
   (e: "rename-user", payload: { user_no: number; nickname: string }): void;
 }>();
 
@@ -109,6 +111,7 @@ const editNickname = ref("");
 const editPhone = ref("");
 const editUserName = ref("");
 const editIsDeleted = ref(false);
+const editDeptNo = ref<number | null>(null);
 const editMode = ref<"add" | "edit">("add");
 const modalError = ref("");
 const LOGIN_ID_RE = /^[A-Za-z0-9]{1,20}$/;
@@ -120,17 +123,27 @@ const openAddModal = () => {
   editPhone.value = "";
   editUserName.value = "";
   editIsDeleted.value = false;
+  editDeptNo.value = null;
   modalError.value = "";
   showUserModal.value = true;
 };
 
-const openEditModal = (u: { user_no: number; loginId?: string; nickname: string; phone?: string | null; userName?: string | null; isDeleted: boolean }) => {
+// ─── 부서 ───
+const deptNameOf = (deptNo?: number | null): string =>
+  deptNo == null ? "" : (props.depts.find((d) => d.deptNo === deptNo)?.deptName ?? "");
+// 드롭다운 옵션: 사용 중인 부서(정렬순서는 서버가 맞춰 보냄) + 현재 지정된 미사용 부서(표시용)
+const deptOptions = computed(() =>
+  props.depts.filter((d) => !d.isDeleted || d.deptNo === editDeptNo.value),
+);
+
+const openEditModal = (u: { user_no: number; loginId?: string; nickname: string; phone?: string | null; userName?: string | null; isDeleted: boolean; deptNo?: number | null }) => {
   editMode.value = "edit";
   editLoginId.value = u.loginId ?? "";
   editNickname.value = u.nickname;
   editPhone.value = u.phone ?? "";
   editUserName.value = u.userName ?? "";
   editIsDeleted.value = u.isDeleted;
+  editDeptNo.value = u.deptNo ?? null;
   modalError.value = "";
   showUserModal.value = true;
   closeMenu();
@@ -155,7 +168,7 @@ const confirmUserModal = () => {
   modalError.value = "";
   const phone = editPhone.value.trim() ? editPhone.value.trim().slice(0, 30) : null;
   const userName = editUserName.value.trim() ? editUserName.value.trim().slice(0, 30) : null;
-  emit("upsert-user", { loginId: id, nickname: nick, phone, userName, isDeleted: editIsDeleted.value });
+  emit("upsert-user", { loginId: id, nickname: nick, phone, userName, isDeleted: editIsDeleted.value, deptNo: editDeptNo.value });
   showUserModal.value = false;
 };
 
@@ -233,6 +246,7 @@ const confirmRenameModal = () => {
       >
         <span class="avatar">{{ u.nickname.slice(0, 1) }}</span>
         <span class="name">{{ u.nickname }}</span>
+        <span v-if="isAdmin && deptNameOf((u as UserDetail).deptNo)" class="dept-tag">{{ deptNameOf((u as UserDetail).deptNo) }}</span>
         <span v-if="u.isDeleted" class="withdrawn-tag">탈퇴</span>
         <span
           class="presence"
@@ -301,6 +315,13 @@ const confirmRenameModal = () => {
           maxlength="30"
           @keyup.enter="confirmUserModal"
         />
+        <label class="field-label">부서</label>
+        <select v-model="editDeptNo" class="text-input">
+          <option :value="null">선택 안 함</option>
+          <option v-for="d in deptOptions" :key="d.deptNo" :value="d.deptNo">
+            {{ d.deptName }}{{ d.isDeleted ? ' (미사용)' : '' }}
+          </option>
+        </select>
         <label class="check-row">
           <input type="checkbox" v-model="editIsDeleted" />
           탈퇴여부 (체크 = 탈퇴)
@@ -470,6 +491,14 @@ const confirmRenameModal = () => {
   background: #6c757d;
   border-radius: 4px;
   padding: 2px 6px;
+}
+.dept-tag {
+  font-size: 11px;
+  color: #0b5ed7;
+  background: #e7f1ff;
+  border-radius: 4px;
+  padding: 2px 6px;
+  flex-shrink: 0;
 }
 .edit-btn {
   border: 1px solid #ddd;

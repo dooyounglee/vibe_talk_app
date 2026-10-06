@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import type { ChatMessage, ChatUser, MyStatus, RoomInfo } from "../types/chat";
+import type { ChatMessage, ChatUser, Department, MyStatus, RoomInfo } from "../types/chat";
 import {
   DEFAULT_MY_STATUS,
   MY_STATUS_EMOJI,
@@ -80,8 +80,13 @@ export interface UserDetail {
   phone?: string | null;
   userName?: string | null;
   isDeleted: boolean;
+  deptNo?: number | null;
 }
 const usersDetail = ref<Array<UserDetail>>([]);
+// depts: admin 전용 부서 목록(미사용 포함 + 소속 인원수) — '설정 > 부서관리'용
+const depts = ref<Array<Department>>([]);
+// dept_upsert 결과 — seq로 매 응답을 구분해 모달이 성공/실패를 감지한다
+const deptUpsertResult = ref<{ seq: number; ok: boolean; text: string } | null>(null);
 // join 실패 메시지 (미등록/탈퇴 시 LoginView에 표시)
 const joinError = ref("");
 // user_upsert 결과 메시지 (UserListView 모달에 표시)
@@ -231,6 +236,7 @@ interface IncomingPayload {
   /** 서버가 userlist에 실어 보내는 사용자별 상태 (user_no → 상태) */
   userStatuses?: Record<string, MyStatus>;
   usersDetail?: Array<UserDetail & { user_name?: string | null; user_no?: number }>;
+  depts?: Array<Department>;
   isDeleted?: boolean;
   is_deleted?: number;
   ok?: boolean;
@@ -351,9 +357,18 @@ const handleIncoming = (raw: string) => {
           phone: (d.phone as string | null) ?? null,
           userName: typeof userName === "string" ? userName : null,
           isDeleted: Boolean(isDeleted),
+          deptNo: d.deptNo == null ? null : Number(d.deptNo),
         };
       })
       .filter((d) => d.user_no > 0 && d.user_no !== myUserNo.value);
+  } else if (data.type === "dept_list") {
+    depts.value = Array.isArray(data.depts) ? data.depts : [];
+  } else if (data.type === "dept_upsert_result") {
+    deptUpsertResult.value = {
+      seq: (deptUpsertResult.value?.seq ?? 0) + 1,
+      ok: data.ok === true,
+      text: data.ok ? "" : String(data.text || "부서 저장에 실패했습니다"),
+    };
   } else if (data.type === "join_ok" || data.type === "my_profile") {
     const no = toNo(data.user_no ?? data.userNo);
     if (no != null) {
@@ -905,6 +920,7 @@ const upsertUser = (
   isDeleted: boolean,
   phone?: string | null,
   userName?: string | null,
+  deptNo?: number | null,
 ): boolean => {
   if (!isAdmin()) return false;
   const id = targetLoginId.trim();
@@ -916,8 +932,31 @@ const upsertUser = (
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   userUpsertResult.value = "";
   ws.send(
-    JSON.stringify({ type: "user_upsert", loginId: id, nickname: nick, isDeleted, phone: phone ?? null, userName: userName ?? null })
+    JSON.stringify({
+      type: "user_upsert",
+      loginId: id,
+      nickname: nick,
+      isDeleted,
+      phone: phone ?? null,
+      userName: userName ?? null,
+      deptNo: deptNo ?? null,
+    })
   );
+  return true;
+};
+
+// ─── 부서 관리: 추가/수정/미사용 (admin 전용) ───
+// deptNo 없으면 신규, 있으면 수정 (deptCode는 신규 시에만 사용)
+const upsertDept = (payload: {
+  deptNo?: number | null;
+  deptCode: string;
+  deptName: string;
+  sortOrder: number;
+  isDeleted: boolean;
+}): boolean => {
+  if (!isAdmin()) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "dept_upsert", ...payload }));
   return true;
 };
 
@@ -995,6 +1034,9 @@ export function useChatSocket() {
     statusEmojiOf,
     statusTextOf,
     usersDetail,
+    depts,
+    deptUpsertResult,
+    upsertDept,
     joinError,
     userUpsertResult,
     userRenameResult,
