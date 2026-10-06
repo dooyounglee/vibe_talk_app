@@ -25,3 +25,7 @@ dist-ssr
 
 # vitest coverage
 coverage
+
+# e2e: downloaded msedgedriver
+e2e/bin
+e2e/node_modules
