@@ -772,6 +772,21 @@ const renameRoom = (roomId: number, title: string): boolean => {
   return true;
 };
 
+// ─── 번호방: 초대 (메인 창의 단일 소켓으로 전송) ───
+// 채팅창/목록에서 고른 대상 user_no를 방에 추가해 달라고 서버에 요청한다.
+// 서버는 멤버 추가 + 초대받은 멤버의 제목 기본값(닉네임 나열)을 DB에 저장한다.
+const sendRoomInvite = (roomId: number, memberNos: number[]): boolean => {
+  const uniq = [...new Set(
+    (Array.isArray(memberNos) ? memberNos : [])
+      .map((n) => Number(n))
+      .filter((n) => Number.isInteger(n) && n > 0),
+  )].slice(0, 50);
+  if (!Number.isInteger(roomId) || roomId <= 0 || uniq.length === 0) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_invite", roomId, memberNos: uniq }));
+  return true;
+};
+
 const sendRoom = (roomId: number, text: string): boolean => {
   const trimmed = text.trim();
   if (trimmed === "" || !Number.isInteger(roomId)) return false;
@@ -1007,6 +1022,7 @@ export function useChatSocket() {
     deleteRoom,
     refreshRooms,
     renameRoom,
+    sendRoomInvite,
     sendRoom,
     requestOneToOneRoom,
     requestRoomHistory,

@@ -22,6 +22,8 @@ export interface RoomStatePayload {
   myNickname: string;
   messages: ChatMessage[];
   members: ChatUser[];
+  /** 채팅창이 '초대하기' 모달에 렌더할 사용자 목록 (메인 창이 스냅샷으로 내려줌) */
+  users: ChatUser[];
   connectionStatus: string;
   isConnected: boolean;
 }
@@ -35,6 +37,8 @@ export type ChatBusMessage =
   | { kind: "room-send"; roomId: number; text: string; id: string; mainId?: string }
   // 번호방 채팅창 → 메인: 방제목 수정 요청 (소켓은 메인 창에만 있으므로 경유)
   | { kind: "room-rename"; roomId: number; title: string; mainId?: string }
+  // 번호방 채팅창 → 메인: 초대 요청 (소켓은 메인 창에만 있으므로 경유)
+  | { kind: "room-invite"; roomId: number; memberNos: number[]; mainId?: string }
   // 메인 → 채팅창
   | ({ kind: "room-state" } & RoomStatePayload & { mainId?: string })
   | { kind: "main-ready"; mainId?: string }

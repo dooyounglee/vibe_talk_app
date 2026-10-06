@@ -30,6 +30,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
   const busUserNo = ref<number | null>(null);
   const busNickname = ref(localStorage.getItem(LOGIN_ID_STORAGE_KEY) ?? "");
   const busMembers = ref<ChatUser[]>([]);
+  const busUsers = ref<ChatUser[]>([]);
   const busRoomName = ref("");
   const busConnectionStatus = ref("메인 창에 연결 중...");
   const busIsConnected = ref(false);
@@ -46,13 +47,14 @@ export function useChatRoom(roomId: { readonly value: number }) {
   };
   const applyState = (
     userNo: number | null, nick: string, rname: string, msgs: ChatMessage[],
-    mems: ChatUser[], status: string, connected: boolean,
+    mems: ChatUser[], status: string, connected: boolean, users: ChatUser[] = [],
   ) => {
     busUserNo.value = userNo;
     busNickname.value = nick;
     busRoomName.value = rname;
     busMessages.value = [...msgs];
     busMembers.value = [...mems];
+    busUsers.value = [...users];
     busConnectionStatus.value = status;
     busIsConnected.value = connected;
     linked.value = true;
@@ -111,6 +113,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
       applyState(
         msg.myUserNo, msg.myNickname, msg.roomName, msg.messages,
         msg.members, msg.connectionStatus, msg.isConnected,
+        Array.isArray(msg.users) ? msg.users : [],
       );
     } else if (msg.kind === "main-ready") {
       announceOpen();
@@ -165,6 +168,10 @@ export function useChatRoom(roomId: { readonly value: number }) {
     direct.value
       ? (store.roomMembers.value[effectiveRoomId.value] ?? [])
       : busMembers.value,
+  );
+  // '초대하기' 모달에 넘길 사용자 목록 (메인 창이 내려주는 스냅샷 — 본인은 이미 제외됨)
+  const users: ComputedRef<ChatUser[]> = computed(() =>
+    direct.value ? store.userlist.value : busUsers.value,
   );
   const connectionStatus: ComputedRef<string> = computed(() =>
     direct.value ? store.connectionStatus.value : busConnectionStatus.value,
@@ -270,12 +277,37 @@ export function useChatRoom(roomId: { readonly value: number }) {
     }
   };
 
+  // 방 초대. 방제목 수정과 완전히 같은 경로를 쓴다:
+  //   같은 탭(direct)이면 소켓이 바로 있으므로 직접 보내고,
+  //   새 창이면 소켓이 있는 메인 창에 버스로 요청만 넘긴다.
+  const invite = (memberNos: number[]): boolean => {
+    const target = effectiveRoomId.value;
+    const list = (Array.isArray(memberNos) ? memberNos : []).filter((n) =>
+      Number.isInteger(Number(n)) && Number(n) > 0,
+    );
+    if (!target || list.length === 0) return false;
+    if (direct.value) return store.sendRoomInvite(target, list);
+    if (!linked.value) return false;
+    try {
+      bus?.post({
+        kind: "room-invite",
+        roomId: target,
+        memberNos: list,
+        mainId: myMainId ?? undefined,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   return {
     messages,
     myUserNo,
     myNickname,
     roomName: rname,
     members,
+    users,
     connectionStatus,
     isConnected,
     hasSession,
@@ -283,6 +315,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
     effectiveRoomId,
     send,
     renameRoom,
+    invite,
     announceOpen,
     announceClose,
   };

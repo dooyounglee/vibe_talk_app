@@ -20,6 +20,7 @@ const emit = defineEmits<{
   (e: "join-room", roomId: number): void;
   (e: "leave-room", roomId: number): void;
   (e: "rename-room", roomId: number): void;
+  (e: "invite-room", roomId: number): void;
   (e: "refresh"): void;
 }>();
 
@@ -49,7 +50,7 @@ const closeMenu = () => {
 
 // ─── 방 개별 컨텍스트 메뉴 (우클릭 / ⋮ 버튼) ───
 const MENU_WIDTH = 160;
-const MENU_HEIGHT = 132;
+const MENU_HEIGHT = 170; // 행 4개(열기/방제목 변경/초대/나가기) 기준 높이 여유분
 
 const ctxRoomId = ref<number | null>(null);
 const ctxPos = ref({ x: 0, y: 0 });
@@ -87,7 +88,7 @@ const closeRoomMenu = () => {
 
 const runRoomAction = (
   roomId: number | null,
-  type: "open-room" | "leave-room" | "rename-room",
+  type: "open-room" | "leave-room" | "rename-room" | "invite-room",
 ) => {
   if (roomId === null) return;
   closeRoomMenu();
@@ -95,6 +96,8 @@ const runRoomAction = (
     emit("open-room", roomId);
   } else if (type === "rename-room") {
     emit("rename-room", roomId);
+  } else if (type === "invite-room") {
+    emit("invite-room", roomId);
   } else {
     emit("leave-room", roomId);
   }
@@ -190,6 +193,7 @@ onBeforeUnmount(() => {
     >
       <button @click="runRoomAction(ctxRoomId, 'open-room')">열기</button>
       <button @click="runRoomAction(ctxRoomId, 'rename-room')">방제목 변경</button>
+      <button @click="runRoomAction(ctxRoomId, 'invite-room')">초대</button>
       <button class="danger" @click="runRoomAction(ctxRoomId, 'leave-room')">나가기</button>
     </div>
 

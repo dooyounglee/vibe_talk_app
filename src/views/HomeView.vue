@@ -62,6 +62,7 @@ const {
   leaveRoom,
   refreshRooms,
   renameRoom,
+  sendRoomInvite,
   sendRoom,
   upsertUser,
   renameUser,
@@ -233,6 +234,8 @@ const broadcastRoom = (roomId: number) => {
     myNickname: nickname.value,
     messages: [...(roomMessages.value[roomId] ?? [])],
     members: [...(roomMembers.value[roomId] ?? [])],
+    // 채팅창이 '초대하기' 모달을 띄울 때 쓰는 사용자 목록 스냅샷 (본인 제외)
+    users: [...userlist.value],
     connectionStatus: connectionStatus.value,
     isConnected: isConnected.value,
     mainId,
@@ -438,6 +441,12 @@ onMounted(() => {
         // 서버가 my_rooms를 내려주면 목록이 → 열린 방 창 순서로 자동 갱신된다.
         renameRoom(msg.roomId, msg.title);
         break;
+      case "room-invite":
+        // 채팅방 창(팝업)에서 '+'로 요청한 초대.
+        // 소켓은 메인 창에만 있으므로 여기서 서버로 넘기고,
+        // 서버가 my_rooms/history_room을 내려주면 대상자 화면이 갱신된다.
+        sendRoomInvite(msg.roomId, msg.memberNos);
+        break;
       case "room-send": {
         const key = dedupeKeyFor(msg);
         if (key) {
@@ -607,6 +616,45 @@ const handleConfirmRename = (title: string) => {
   closeRenameModal();
 };
 
+// ─── 방 초대 (채팅목록 ⋮ 메뉴 → '초대') ───
+// 채팅방 창의 '+'로 여는 경우와 같은 CreateRoomModal invite 모드를 쓴다.
+// 소켓은 메인 창에만 있으므로 이쪽이 서버(room_invite)로 보낸다.
+const inviteRoomId = ref<number | null>(null);
+const inviteError = ref("");
+
+const openInviteModal = (roomId: number) => {
+  if (!myRooms.value.some((r) => r.roomId === roomId)) return;
+  inviteError.value = "";
+  inviteRoomId.value = roomId;
+};
+
+const closeInviteModal = () => {
+  inviteRoomId.value = null;
+  inviteError.value = "";
+};
+
+// 초대 시 검색/선택에서 제외할 사용자: 알고 있는 기존 멤버 + 본인
+const inviteExcludeNos = computed<number[]>(() => {
+  const roomId = inviteRoomId.value;
+  if (roomId === null) return [];
+  const known = roomMembers.value[roomId] ?? [];
+  return [
+    ...new Set([
+      ...known.map((u) => u.user_no),
+      ...(myUserNo.value !== null ? [myUserNo.value] : []),
+    ]),
+  ];
+});
+
+const handleConfirmInvite = (payload: { members: number[] }) => {
+  if (inviteRoomId.value === null) return;
+  if (!sendRoomInvite(inviteRoomId.value, payload.members)) {
+    inviteError.value = "초대 요청을 보내지 못했습니다. 연결을 확인해주세요.";
+    return;
+  }
+  closeInviteModal();
+};
+
 // ─── 사용자 관리: 추가/수정 (admin 전용) ───
 const handleUpsertUser = (payload: {
   loginId: string;
@@ -718,6 +766,7 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       @join-room="(id) => joinRoom(id)"
       @leave-room="(id) => leaveRoom(id)"
       @rename-room="(id) => openRenameModal(id)"
+      @invite-room="(id) => openInviteModal(id)"
       @refresh="() => refreshRooms()"
     />
     <UserListView
@@ -757,6 +806,19 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       :current-title="roomRawName(renameTargetRoom)"
       @confirm="handleConfirmRename"
       @cancel="closeRenameModal"
+    />
+
+    <!-- 방 초대 팝업: 채팅목록 ⋮ 메뉴의 '초대' → 사용자 선택 후 확인 -->
+    <CreateRoomModal
+      v-if="inviteRoomId !== null"
+      mode="invite"
+      :users="userlist"
+      :exclude-nos="inviteExcludeNos"
+      :my-nickname="nickname"
+      :my-user-no="myUserNo"
+      :error-reason="inviteError"
+      @confirm="handleConfirmInvite"
+      @cancel="closeInviteModal"
     />
   </div>
 

@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ChatWindow from "../components/ChatWindow.vue";
+import CreateRoomModal from "../components/CreateRoomModal.vue";
 import RenameRoomModal from "../components/RenameRoomModal.vue";
 import { useChatRoom } from "../composables/useChatRoom";
 import { currentRoomIdFromUrl, isTauriRuntime } from "../chatBus";
@@ -26,7 +27,7 @@ const roomTitle = computed(() =>
 
 const {
   messages, myUserNo, myNickname, roomName, connectionStatus,
-  isConnected, hasSession, send, renameRoom, announceClose,
+  isConnected, hasSession, members, users, send, renameRoom, invite, announceClose,
 } = useChatRoom(roomId);
 
 // 상단 연필 → 방제목 변경 모달
@@ -49,6 +50,35 @@ const handleRename = (title: string) => {
     return;
   }
   closeRenameModal();
+};
+
+// 상단 '+' → 초대하기 모달 (방 만들기 모달의 invite 모드 재사용)
+const showInviteModal = ref(false);
+const inviteError = ref("");
+
+// 초대 대상 제외 목록: 이미 방에 있는 멤버 + 본인
+const inviteExcludeNos = computed<number[]>(() => [
+  ...members.value.map((u) => u.user_no),
+  ...(myUserNo.value !== null ? [myUserNo.value] : []),
+]);
+
+const openInviteModal = () => {
+  inviteError.value = "";
+  showInviteModal.value = true;
+};
+
+const closeInviteModal = () => {
+  showInviteModal.value = false;
+  inviteError.value = "";
+};
+
+// 확인 → 소켓이 있는 메인 창으로 bus 경유 전송(메인 창이 서버에 room_invite 보냄)
+const handleInvite = (payload: { members: number[] }) => {
+  if (!invite(payload.members)) {
+    inviteError.value = "초대 요청을 보내지 못했습니다. 연결을 확인해주세요.";
+    return;
+  }
+  closeInviteModal();
 };
 
 onMounted(() => {
@@ -102,6 +132,12 @@ const goHome = () => {
   >
     <template #header-actions>
       <button
+        class="invite-btn"
+        title="초대"
+        :disabled="!isConnected"
+        @click="openInviteModal"
+      >+</button>
+      <button
         class="rename-btn"
         title="방제목 변경"
         :disabled="!isConnected"
@@ -109,6 +145,19 @@ const goHome = () => {
       >✏</button>
     </template>
   </ChatWindow>
+
+  <!-- 상단 '+'로 연 초대 모달 (방 만들기 모달의 invite 모드 재사용) -->
+  <CreateRoomModal
+    v-if="showInviteModal && hasSession"
+    mode="invite"
+    :users="users"
+    :exclude-nos="inviteExcludeNos"
+    :my-nickname="myNickname"
+    :my-user-no="myUserNo"
+    :error-reason="inviteError"
+    @confirm="handleInvite"
+    @cancel="closeInviteModal"
+  />
 
   <!-- 상단 연필로 연 방제목 변경 모달 (로그인 전에는 열리지 않는다) -->
   <RenameRoomModal
@@ -130,7 +179,8 @@ const goHome = () => {
 
 <style scoped>
 /* 상단 방제목 오른쪽의 연필 버튼 (ChatWindow 헤더 슬롯) */
-.rename-btn {
+.rename-btn,
+.invite-btn {
   border: none;
   background: transparent;
   color: #fff;
@@ -141,8 +191,10 @@ const goHome = () => {
   border-radius: 6px;
   opacity: 0.9;
 }
-.rename-btn:hover { background: rgba(255, 255, 255, 0.2); opacity: 1; }
-.rename-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.rename-btn:hover,
+.invite-btn:hover { background: rgba(255, 255, 255, 0.2); opacity: 1; }
+.rename-btn:disabled,
+.invite-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .no-session {
   height: 100vh; height: 100dvh;
   display: flex; flex-direction: column;

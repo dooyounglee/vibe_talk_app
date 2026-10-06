@@ -4,12 +4,24 @@ import { truncateRoomTitle } from "../types/chat";
 import type { ChatUser } from "../types/chat";
 import UserSearchInput from "./UserSearchInput.vue";
 
-const props = defineProps<{
-  users: ChatUser[];
-  initialSelected?: number[];
-  myNickname?: string;
-  myUserNo?: number | null;
-}>();
+const props = withDefaults(
+  defineProps<{
+    users: ChatUser[];
+    initialSelected?: number[];
+    myNickname?: string;
+    myUserNo?: number | null;
+    /**
+     * create = 방 만들기 (기본, 기존 동작 불변)
+     * invite = 초대하기 (제목만 바꾸고 '방 이름' 표시와 안내문구를 숨긴다)
+     */
+    mode?: "create" | "invite";
+    /** 초대 시 기존 멤버 제외 — UserSearchInput 검색/선택에서 빠진다 */
+    excludeNos?: number[];
+    /** 전송 실패 사유 — 있을 때만 빨간 문구로 표시 */
+    errorReason?: string;
+  }>(),
+  { mode: "create" },
+);
 
 const emit = defineEmits<{
   (e: "confirm", payload: { members: number[] }): void;
@@ -94,12 +106,15 @@ const confirm = () => {
 <template>
   <div class="modal-backdrop" @click.self="$emit('cancel')">
     <div class="modal">
-      <h3 class="modal-title">방 만들기</h3>
-      <div class="room-name-box">
-        <span class="room-name-label">방 이름</span>
-        <span class="room-name-value" :title="defaultName">{{ previewName }}</span>
-      </div>
-      <p class="modal-desc">{{ previewHint }}</p>
+      <h3 class="modal-title">{{ mode === "invite" ? "초대하기" : "방 만들기" }}</h3>
+      <!-- 초대하기에서는 '방 이름' 표시와 안내문구를 보여주지 않는다 (요청 화면 = 이 둘을 뺀 화면) -->
+      <template v-if="mode !== 'invite'">
+        <div class="room-name-box">
+          <span class="room-name-label">방 이름</span>
+          <span class="room-name-value" :title="defaultName">{{ previewName }}</span>
+        </div>
+        <p class="modal-desc">{{ previewHint }}</p>
+      </template>
 
       <!-- ① 선택한 사용자: 검색과 분리된 고정 영역 (검색어를 바꿔도 유지된다) -->
       <div class="selected-box">
@@ -136,6 +151,7 @@ const confirm = () => {
         v-model:keyword="keyword"
         v-model:results="filteredUsers"
         :users="users"
+        :exclude-nos="excludeNos"
         @esc="onEsc"
       />
 
@@ -157,6 +173,7 @@ const confirm = () => {
         </li>
       </ul>
       <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="errorReason" class="error">{{ errorReason }}</p>
       <div class="modal-btns">
         <button class="cancel" @click="$emit('cancel')">취소</button>
         <button
