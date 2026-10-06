@@ -1,5 +1,5 @@
 import { emit, listen } from "@tauri-apps/api/event";
-import type { ChatMessage } from "./types/chat";
+import type { ChatMessage, ChatUser } from "./types/chat";
 
 /**
  * 메인 창 ↔ 채팅방 창 간 이벤트 버스.
@@ -18,9 +18,10 @@ export const CHAT_BUS_NAME = "vibe-talk-bus";
 export interface RoomStatePayload {
   roomId: number;
   roomName: string;
+  myUserNo: number | null;
   myNickname: string;
   messages: ChatMessage[];
-  members: string[];
+  members: ChatUser[];
   connectionStatus: string;
   isConnected: boolean;
 }

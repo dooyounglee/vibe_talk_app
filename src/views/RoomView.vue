@@ -25,7 +25,7 @@ const roomTitle = computed(() =>
 );
 
 const {
-  messages, myNickname, roomName, connectionStatus,
+  messages, myUserNo, myNickname, roomName, connectionStatus,
   isConnected, hasSession, send, renameRoom, announceClose,
 } = useChatRoom(roomId);
 
@@ -92,6 +92,7 @@ const goHome = () => {
   <ChatWindow
     v-if="hasSession"
     :peer="roomTitle"
+    :my-user-no="myUserNo"
     :my-nickname="myNickname"
     :messages="messages"
     :connection-status="connectionStatus"

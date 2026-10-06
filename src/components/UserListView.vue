@@ -1,43 +1,56 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
+import type { ChatUser } from "../types/chat";
 import type { UserDetail } from "../composables/useChatSocket";
+import UserSearchInput from "./UserSearchInput.vue";
 
 const props = defineProps<{
+  myUserNo: number | null;
   myNickname: string;
-  users: string[];
-  onlineUsers: string[];
+  users: ChatUser[];
+  onlineUsers: number[];
   connectionStatus: string;
   isConnected: boolean;
   isAdmin: boolean;
   usersDetail: UserDetail[];
   upsertResult: string;
+  renameResult: string;
 }>();
 
 const emit = defineEmits<{
-  (e: "open-chat", user: string): void;
-  (e: "create-room-with", user: string): void;
+  (e: "open-chat", user: ChatUser): void;
+  (e: "create-room-with", user: ChatUser): void;
   (e: "reconnect"): void;
   (e: "disconnect"): void;
-  (e: "upsert-user", payload: { nickname: string; isDeleted: boolean }): void;
+  (e: "upsert-user", payload: { loginId: string; nickname: string; phone: string | null; userName: string | null; isDeleted: boolean }): void;
+  (e: "rename-user", payload: { user_no: number; nickname: string }): void;
 }>();
 
 // admin에게 보여줄 목록: 탈퇴 포함 전체, 일반 사용자는 users 그대로
 const displayUsers = computed(() => {
   if (props.isAdmin) return props.usersDetail;
-  return props.users.map((nickname) => ({ nickname, isDeleted: false }));
+  return props.users.map((u) => ({ user_no: u.user_no, loginId: "", nickname: u.nickname, isDeleted: false }));
 });
 
-// 목록 정렬: 닉네임 오름차순 고정.
-// (최근 대화 여부와 무관하게 항상 이름순으로 같은 순서를 유지한다)
-const sortedUsers = computed(() =>
-  [...displayUsers.value].sort((a, b) => a.nickname.localeCompare(b.nickname)),
-);
+// ─── 사용자 검색 (UserSearchInput 공통컴포넌트) ───
+// 검색어가 있으면 컴포넌트가 돌려준 searchResults를, 없으면 전체 목록을 정렬해 보여준다.
+const searchKeyword = ref("");
+const searchResults = ref<ChatUser[]>([]);
+type DisplayUser = (typeof displayUsers.value)[number];
+const sortedUsers = computed<DisplayUser[]>(() => {
+  // 컴포넌트는 displayUsers를 복제하지 않고 동일 객체를 걸러 돌려주므로
+  // 탈퇴(isDeleted) 등 추가 필드도 그대로 살아 있다. (정적 타입만 ChatUser라 단언)
+  const base: DisplayUser[] = searchKeyword.value
+    ? (searchResults.value as DisplayUser[])
+    : displayUsers.value;
+  return [...base].sort((a, b) => a.nickname.localeCompare(b.nickname));
+});
 
 // 우클릭/더보기 메뉴 상태 (어느 사용자에 대한 메뉴인지)
-const menuUser = ref<string | null>(null);
+const menuUser = ref<ChatUser | null>(null);
 const menuPos = ref<{ x: number; y: number } | null>(null);
 
-const openMenu = (user: string, x: number, y: number) => {
+const openMenu = (user: ChatUser, x: number, y: number) => {
   menuUser.value = user;
   menuPos.value = { x, y };
 };
@@ -47,12 +60,12 @@ const closeMenu = () => {
   menuPos.value = null;
 };
 
-const onContextMenu = (e: MouseEvent, user: string) => {
+const onContextMenu = (e: MouseEvent, user: ChatUser) => {
   e.preventDefault();
   openMenu(user, e.clientX, e.clientY);
 };
 
-const onMoreClick = (e: MouseEvent, user: string) => {
+const onMoreClick = (e: MouseEvent, user: ChatUser) => {
   e.stopPropagation();
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
   openMenu(user, rect.left, rect.bottom + 4);
@@ -69,24 +82,35 @@ const menuStyle = () => {
 };
 
 // ─── 사용자 추가/수정 모달 (admin 전용) ───
+// 등록 화면 확장 대비: id, nickname, 전화번호, 이름, 탈퇴여부
 const showUserModal = ref(false);
+const editLoginId = ref("");
 const editNickname = ref("");
+const editPhone = ref("");
+const editUserName = ref("");
 const editIsDeleted = ref(false);
 const editMode = ref<"add" | "edit">("add");
 const modalError = ref("");
+const LOGIN_ID_RE = /^[A-Za-z0-9]{1,20}$/;
 
 const openAddModal = () => {
   editMode.value = "add";
+  editLoginId.value = "";
   editNickname.value = "";
+  editPhone.value = "";
+  editUserName.value = "";
   editIsDeleted.value = false;
   modalError.value = "";
   showUserModal.value = true;
 };
 
-const openEditModal = (nickname: string, isDeleted: boolean) => {
+const openEditModal = (u: { user_no: number; loginId?: string; nickname: string; phone?: string | null; userName?: string | null; isDeleted: boolean }) => {
   editMode.value = "edit";
-  editNickname.value = nickname;
-  editIsDeleted.value = isDeleted;
+  editLoginId.value = u.loginId ?? "";
+  editNickname.value = u.nickname;
+  editPhone.value = u.phone ?? "";
+  editUserName.value = u.userName ?? "";
+  editIsDeleted.value = u.isDeleted;
   modalError.value = "";
   showUserModal.value = true;
   closeMenu();
@@ -98,32 +122,76 @@ const closeUserModal = () => {
 };
 
 const confirmUserModal = () => {
-  const trimmed = editNickname.value.trim().slice(0, 20);
-  if (!trimmed) {
+  const id = editLoginId.value.trim();
+  const nick = editNickname.value.trim().slice(0, 20);
+  if (!LOGIN_ID_RE.test(id)) {
+    modalError.value = "아이디는 영문+숫자, 최대 20자입니다.";
+    return;
+  }
+  if (!nick) {
     modalError.value = "닉네임을 입력하세요.";
     return;
   }
   modalError.value = "";
-  emit("upsert-user", { nickname: trimmed, isDeleted: editIsDeleted.value });
+  const phone = editPhone.value.trim() ? editPhone.value.trim().slice(0, 30) : null;
+  const userName = editUserName.value.trim() ? editUserName.value.trim().slice(0, 30) : null;
+  emit("upsert-user", { loginId: id, nickname: nick, phone, userName, isDeleted: editIsDeleted.value });
   showUserModal.value = false;
+};
+
+// 내 닉네임 변경 (본인)
+const showRenameModal = ref(false);
+const renameInput = ref("");
+const renameError = ref("");
+const openRenameModal = () => {
+  renameInput.value = props.myNickname;
+  renameError.value = "";
+  showRenameModal.value = true;
+};
+const confirmRenameModal = () => {
+  const nick = renameInput.value.trim().slice(0, 20);
+  if (!nick) {
+    renameError.value = "닉네임을 입력하세요.";
+    return;
+  }
+  if (props.myUserNo == null) {
+    renameError.value = "로그인이 필요합니다.";
+    return;
+  }
+  renameError.value = "";
+  emit("rename-user", { user_no: props.myUserNo, nickname: nick });
+  showRenameModal.value = false;
 };
 </script>
 
 <template>
   <div class="userlist-screen" @click="closeMenu">
     <h2 class="list-title">사용자 목록 ({{ sortedUsers.length }}명)
-      <button v-if="isAdmin" class="small-btn primary add-btn" @click="openAddModal">추가</button>
+      <span class="title-btns">
+        <button class="small-btn" @click="openRenameModal">내 닉네임 변경</button>
+        <button v-if="isAdmin" class="small-btn primary add-btn" @click="openAddModal">추가</button>
+      </span>
     </h2>
+    <!-- 사용자 검색: 결과만 이 컴포넌트가 맡고, 우클릭/관리자 동작은 목록이 계속 담당 -->
+    <UserSearchInput
+      v-model:keyword="searchKeyword"
+      v-model:results="searchResults"
+      :users="displayUsers"
+    />
     <p v-if="upsertResult" class="error">{{ upsertResult }}</p>
-    <p v-if="sortedUsers.length === 0" class="empty">등록된 다른 사용자가 없습니다.</p>
+    <p v-if="renameResult" class="error">{{ renameResult }}</p>
+    <p v-if="!searchKeyword && sortedUsers.length === 0" class="empty">등록된 다른 사용자가 없습니다.</p>
+    <p v-else-if="searchKeyword && sortedUsers.length === 0" class="empty">
+      "{{ searchKeyword }}" 검색 결과가 없습니다.
+    </p>
     <ul class="user-list">
       <li
         v-for="u in sortedUsers"
-        :key="u.nickname"
+        :key="u.user_no"
         class="user-item"
         :class="{ withdrawn: u.isDeleted }"
-        @dblclick="$emit('open-chat', u.nickname)"
-        @contextmenu="(e) => onContextMenu(e, u.nickname)"
+        @dblclick="$emit('open-chat', { user_no: u.user_no, nickname: u.nickname })"
+        @contextmenu="(e) => onContextMenu(e, { user_no: u.user_no, nickname: u.nickname })"
         :title="u.nickname + '님과 1:1 채팅 / 우클릭: 메뉴'"
       >
         <span class="avatar">{{ u.nickname.slice(0, 1) }}</span>
@@ -131,19 +199,19 @@ const confirmUserModal = () => {
         <span v-if="u.isDeleted" class="withdrawn-tag">탈퇴</span>
         <span
           class="presence"
-          :class="onlineUsers.includes(u.nickname) ? 'online' : 'offline'"
-          :title="onlineUsers.includes(u.nickname) ? '접속중' : '오프라인'"
+          :class="onlineUsers.includes(u.user_no) ? 'online' : 'offline'"
+          :title="onlineUsers.includes(u.user_no) ? '접속중' : '오프라인'"
         ></span>
         <button
           v-if="isAdmin"
           class="edit-btn"
           title="수정"
-          @click.stop="openEditModal(u.nickname, u.isDeleted)"
+          @click.stop="openEditModal(u)"
         >수정</button>
         <button
           class="more-btn"
           title="더보기"
-          @click="(e) => onMoreClick(e, u.nickname)"
+          @click="(e) => onMoreClick(e, { user_no: u.user_no, nickname: u.nickname })"
         >⋮</button>
       </li>
     </ul>
@@ -163,13 +231,37 @@ const confirmUserModal = () => {
     <div v-if="showUserModal" class="modal-backdrop" @click="closeUserModal">
       <div class="modal-card" @click.stop>
         <h3>{{ editMode === 'add' ? '사용자 추가' : '사용자 수정' }}</h3>
+        <label class="field-label">아이디 (영문+숫자, 불변)</label>
+        <input
+          v-model="editLoginId"
+          class="text-input"
+          placeholder="아이디 입력"
+          maxlength="20"
+          :disabled="editMode === 'edit'"
+          @keyup.enter="confirmUserModal"
+        />
         <label class="field-label">닉네임</label>
         <input
           v-model="editNickname"
           class="text-input"
           placeholder="닉네임 입력"
           maxlength="20"
-          :disabled="editMode === 'edit'"
+          @keyup.enter="confirmUserModal"
+        />
+        <label class="field-label">전화번호</label>
+        <input
+          v-model="editPhone"
+          class="text-input"
+          placeholder="전화번호 입력"
+          maxlength="30"
+          @keyup.enter="confirmUserModal"
+        />
+        <label class="field-label">이름</label>
+        <input
+          v-model="editUserName"
+          class="text-input"
+          placeholder="이름 입력"
+          maxlength="30"
           @keyup.enter="confirmUserModal"
         />
         <label class="check-row">
@@ -182,6 +274,26 @@ const confirmUserModal = () => {
           <button class="small-btn primary" @click="confirmUserModal">
             {{ editMode === 'add' ? '추가' : '저장' }}
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 내 닉네임 변경 모달 (본인) -->
+    <div v-if="showRenameModal" class="modal-backdrop" @click="showRenameModal = false">
+      <div class="modal-card" @click.stop>
+        <h3>내 닉네임 변경</h3>
+        <label class="field-label">닉네임</label>
+        <input
+          v-model="renameInput"
+          class="text-input"
+          placeholder="닉네임 입력"
+          maxlength="20"
+          @keyup.enter="confirmRenameModal"
+        />
+        <p v-if="renameError" class="error">{{ renameError }}</p>
+        <div class="modal-actions">
+          <button class="small-btn" @click="showRenameModal = false">취소</button>
+          <button class="small-btn primary" @click="confirmRenameModal">저장</button>
         </div>
       </div>
     </div>

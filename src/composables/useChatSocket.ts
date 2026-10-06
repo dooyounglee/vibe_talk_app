@@ -1,15 +1,14 @@
 import { ref } from "vue";
-import type { ChatMessage, MyStatus, RoomInfo } from "../types/chat";
+import type { ChatMessage, ChatUser, MyStatus, RoomInfo } from "../types/chat";
 import { DEFAULT_MY_STATUS, ROOM_TITLE_INPUT_MAX_LENGTH, normalizeMyStatus } from "../types/chat";
-import { MY_STATUS_STORAGE_KEY } from "../constants";
+import { LOGIN_ID_STORAGE_KEY, MY_STATUS_STORAGE_KEY } from "../constants";
 
 // ─── 모듈 싱글톤 상태 ───
-// 같은 윈도우(JS 컨텍스트) 안에서는 하나의 WebSocket만 유지한다.
-// 실제 소켓 연결은 메인 창(HomeView)에서만 만들고,
-// 새 창으로 열리는 채팅방(RoomView)은 이벤트 버스로 상태를 받아간다.
-//
-// NOTE: 1:1 대화도 "멤버 2명 방"으로만 표현한다. 별도의 DM 상태/경로는 두지 않는다.
 const isConnected = ref(false);
+// 로그인 ID (불변, 영문+숫자 최대20) — 서버 join 키
+const loginId = ref("");
+// 내 user_no (서버 내부 키) + 표시용 닉네임
+const myUserNo = ref<number | null>(null);
 const nickname = ref("");
 
 // ─── 내 상태 (접속/오프라인/회의중/바쁨/자리비움) ───
@@ -37,29 +36,36 @@ const setMyStatus = (value: MyStatus) => {
     // 저장 실패(저장 차단 환경 등)는 무시한다. 화면 반영만으로 동작은 충분하다.
   }
 };
-// userlist: DB 등록 사용자 전체 (탈퇴 제외, 본인 제외) — '사용자' 탭에 표시
-const userlist = ref<Array<string>>([]);
-// onlineUsers: 현재 접속중 닉네임 집합 (초록점/오프라인 구분용)
-const onlineUsers = ref<Array<string>>([]);
+// userlist: DB 등록 사용자 전체 (탈퇴 제외) — '사용자' 탭에 표시
+const userlist = ref<Array<ChatUser>>([]);
+// onlineUsers: 현재 접속중 user_no 집합
+const onlineUsers = ref<Array<number>>([]);
 // usersDetail: admin 전용 전체 사용자(탈퇴 포함) — '사용자'탭 관리용
 export interface UserDetail {
+  user_no: number;
+  loginId: string;
   nickname: string;
+  phone?: string | null;
+  userName?: string | null;
   isDeleted: boolean;
 }
 const usersDetail = ref<Array<UserDetail>>([]);
-// join 실패 메시지 (미등록/탈퇴 시 NicknameView에 표시)
+// join 실패 메시지 (미등록/탈퇴 시 LoginView에 표시)
 const joinError = ref("");
 // user_upsert 결과 메시지 (UserListView 모달에 표시)
 const userUpsertResult = ref("");
+// user_rename 결과 메시지
+const userRenameResult = ref("");
+const isAdmin = () => myUserNo.value === 1;
+
 // 방제목 수정 실패 사유 (RenameRoomModal에 표시). 성공하면 서버가 새 목록을 주므로 비운다.
 const roomRenameError = ref<{ roomId: number; reason: string } | null>(null);
-const isAdmin = () => nickname.value === "admin";
 
 // 번호방 상태 (내가 속한 방만)
 const myRooms = ref<Array<RoomInfo>>([]);
 const roomMessages = ref<Record<number, Array<ChatMessage>>>({});
 const roomUnread = ref<Record<number, number>>({});
-const roomMembers = ref<Record<number, Array<string>>>({});
+const roomMembers = ref<Record<number, Array<ChatUser>>>({});
 // 1:1 대화에 대응하는 방 번호를 찾는다.
 // (1:1 방의 displayName은 상대 닉네임이므로 매칭할 수 있다)
 // '사용자' 탭에서 상대를 눌러 이미 만들어진 방으로 바로 열기 위한 조회다.
@@ -73,13 +79,12 @@ const findOneToOneRoomId = (peer: string): number | null => {
 // findOneToOneRoomId 의 역방향: 1:1 방 번호 → 상대 닉네임.
 // 그룹방(3명 이상)이면 null.
 const oneToOnePeerOfRoom = (roomId: number): string | null => {
+  const meNo = myUserNo.value;
   const me = nickname.value.trim();
   // 1순위: 방을 열며 받은 실제 멤버 목록이 있으면 이를 따른다 (가장 정확)
-  const members = (roomMembers.value[roomId] ?? [])
-    .map((m) => m.trim())
-    .filter((m) => m !== "");
-  if (members.length === 2 && members.includes(me)) {
-    return members.find((m) => m !== me) ?? null;
+  const members = roomMembers.value[roomId] ?? [];
+  if (members.length === 2 && meNo != null && members.some((m) => m.user_no === meNo)) {
+    return members.find((m) => m.user_no !== meNo)?.nickname ?? null;
   }
   // 폴백: 아직 room_members를 못 받은 경우 내 방 목록의 표시제목(=상대 닉네임)으로 판단
   const info = myRooms.value.find((r) => r.roomId === roomId);
@@ -166,12 +171,13 @@ const ensureRoomBox = (roomId: number): Array<ChatMessage> => {
 };
 
 interface HistoryEntry {
+  user_no?: number;
   nickname?: string;
   text?: string;
   timestamp?: number;
   /** 읽음 표시(카톡식 숫자) 계산용 서버 메시지 id */
   msgId?: number;
-  /** 서버가 함께 내려주는 원본 id (구버전 payload 호환용) */
+  /** 서버가 함께 내려주는 원본 id */
   id?: number;
   /** 이 메시지를 아직 안 읽은 사람 수 (0 이면 표시하지 않음). 발신자만 제외하고 센다 */
   unreadCount?: number;
@@ -179,23 +185,30 @@ interface HistoryEntry {
 
 interface IncomingPayload {
   type?: string;
+  user_no?: number;
+  userNo?: number;
+  loginId?: string;
+  login_id?: string;
   nickname?: string;
   from?: string;
+  from_no?: number;
   to?: string;
   text?: string;
-  users?: string[];
-  onlineUsers?: string[];
-  usersDetail?: Array<{ nickname?: string; isDeleted?: boolean; is_deleted?: number }>;
+  users?: Array<ChatUser>;
+  onlineUsers?: Array<number>;
+  usersDetail?: Array<UserDetail & { user_name?: string | null; user_no?: number }>;
   isDeleted?: boolean;
   is_deleted?: number;
   ok?: boolean;
   // 채팅창 열람 시 서버가 보내주는 지난 대화 내역 (history_room)
   withUser?: string;
+  withUserNo?: number;
   messages?: Array<HistoryEntry>;
   // 번호방
   rooms?: Array<RoomInfo>;
   roomId?: number;
-  members?: Array<string>;
+  members?: Array<number>;
+  memberProfiles?: Array<ChatUser>;
   reason?: string;
   timestamp?: number;
   // 안읽은 건수 (서버 DB가 단일 진실 — 다른 PC 로그인 시에도 여기서 복원된다)
@@ -208,6 +221,29 @@ interface IncomingPayload {
   // read_ack: 그 대화의 참여자별 마지막 읽음 위치
   cursors?: Record<string, number>;
 }
+
+// user_no 판정용
+const toNo = (v: unknown): number | null => {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+const userNoOf = (u: unknown): number | null => {
+  if (typeof u === "number" || typeof u === "string") return toNo(u);
+  if (u && typeof u === "object") {
+    const o = u as Record<string, unknown>;
+    return toNo(o.user_no ?? o.userNo ?? o.no ?? o.id);
+  }
+  return null;
+};
+const nickOf = (u: unknown): string => {
+  if (typeof u === "string") return u;
+  if (u && typeof u === "object") {
+    const o = u as Record<string, unknown>;
+    const v = o.nickname ?? o.name;
+    return typeof v === "string" ? v : "";
+  }
+  return "";
+};
 
 const pruneRooms = () => {
   const alive = new Set(myRooms.value.map((r) => r.roomId));
@@ -231,41 +267,58 @@ const readMsgId = (msg?: HistoryEntry): number | undefined => {
  * 서버가 room_opened 로 방 번호를 돌려주면 여기에 걸린 콜백을 깨운다.
  * (이미 만들어진 방이면 서버가 곧바로 회신하므로 즉시 끝난다)
  */
-const pendingOneToOne = new Map<string, (roomId: number) => void>();
+const pendingOneToOne = new Map<number, (roomId: number) => void>();
 
 const handleIncoming = (raw: string) => {
   const data: IncomingPayload = JSON.parse(raw) as IncomingPayload;
   if (data.type === "room_opened") {
     // '사용자' 탭에서 1:1 창을 열라고 요청한 뒤 서버가 방 번호를 알려준 경우.
-    // 대기 중인 요청에 방 번호를 넘겨 호출한 곳이 창을 열게 한다.
-    const peer = String(data.withUser ?? "");
-    if (!peer) return;
+    const peerNo = toNo(data.withUserNo ?? data.withUser);
     const roomId = Number(data.roomId);
-    if (!Number.isInteger(roomId)) return;
-    const resolve = pendingOneToOne.get(peer);
+    if (peerNo == null || !Number.isInteger(roomId)) return;
+    const resolve = pendingOneToOne.get(peerNo);
     if (resolve) {
-      pendingOneToOne.delete(peer);
+      pendingOneToOne.delete(peerNo);
       resolve(roomId);
     }
   } else if (data.type === "userlist") {
-    // users = DB 등록 사용자 전체 (탈퇴 제외), onlineUsers = 현재 접속중
-    // 구버전 서버 호환: onlineUsers가 없으면 users를 그대로 접속중으로 간주
-    const users: Array<string> = Array.isArray(data.users) ? data.users : [];
-    const online: Array<string> = Array.isArray(data.onlineUsers)
-      ? data.onlineUsers
-      : users;
-    userlist.value = users.filter((user) => user !== nickname.value);
-    onlineUsers.value = online.filter((user) => user !== nickname.value);
+    // users = [{user_no, nickname}], onlineUsers = [user_no]
+    const users: Array<ChatUser> = Array.isArray(data.users) ? data.users : [];
+    const online: Array<number> = Array.isArray(data.onlineUsers) ? data.onlineUsers : [];
+    const clean = users
+      .map((u) => ({ user_no: Number(userNoOf(u) ?? 0), nickname: nickOf(u) }))
+      .filter((u) => u.user_no > 0 && u.nickname);
+    userlist.value = clean.filter((u) => u.user_no !== myUserNo.value);
+    onlineUsers.value = online.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0 && n !== myUserNo.value);
   } else if (data.type === "userlist_detail") {
     // admin 전용: 탈퇴 포함 전체 사용자 상세 (본인 제외)
     const detail = Array.isArray(data.usersDetail) ? data.usersDetail : [];
     usersDetail.value = detail
-      .filter((d) => !!d && typeof d.nickname === "string")
-      .map((d) => ({
-        nickname: String(d.nickname),
-        isDeleted: d.isDeleted === true || d.is_deleted === 1,
-      }))
-      .filter((d) => d.nickname !== nickname.value);
+      .map((raw) => {
+        const d = raw as unknown as Record<string, unknown>;
+        const no = Number(d.user_no ?? d.userNo ?? 0);
+        const isDeleted = d.isDeleted === true || d.is_deleted === 1 || d.is_deleted === true;
+        const userName = d.userName ?? d.user_name;
+        return {
+          user_no: no,
+          loginId: String(d.loginId ?? d.login_id ?? ""),
+          nickname: String(d.nickname ?? ""),
+          phone: (d.phone as string | null) ?? null,
+          userName: typeof userName === "string" ? userName : null,
+          isDeleted: Boolean(isDeleted),
+        };
+      })
+      .filter((d) => d.user_no > 0 && d.user_no !== myUserNo.value);
+  } else if (data.type === "join_ok" || data.type === "my_profile") {
+    const no = toNo(data.user_no ?? data.userNo);
+    if (no != null) {
+      myUserNo.value = no;
+      if (typeof data.nickname === "string" && data.nickname) nickname.value = data.nickname;
+      if (typeof (data.loginId ?? data.login_id) === "string" && (data.loginId ?? data.login_id)) {
+        loginId.value = String(data.loginId ?? data.login_id);
+      }
+      joinError.value = "";
+    }
   } else if (data.type === "join_failed") {
     // 미등록/탈퇴 사용자 입장 거부 — 닉네임 화면에 사유 표시
     joinError.value = String(data.text || "입장할 수 없습니다");
@@ -283,12 +336,19 @@ const handleIncoming = (raw: string) => {
     } else {
       userUpsertResult.value = String(data.text || "사용자 저장에 실패했습니다");
     }
+  } else if (data.type === "user_rename_result") {
+    if (data.ok) {
+      userRenameResult.value = "";
+    } else {
+      userRenameResult.value = String(data.text || "닉네임 변경에 실패했습니다");
+    }
   } else if (data.type === "system") {
     // 방 스코프 system 알림은 해당 방 박스에, 전역 알림은 무시(표시 위치 없음)
     const roomId = Number(data.roomId);
     if (Number.isInteger(roomId) && roomId > 0) {
       ensureRoomBox(roomId).push({
         type: "system",
+        user_no: 0,
         nickname: "",
         text: String(data.text ?? ""),
         timestamp: Date.now(),
@@ -302,6 +362,7 @@ const handleIncoming = (raw: string) => {
       .map((r) => ({
         roomId: Number(r.roomId),
         name: String(r.name ?? ""),
+        owner_no: Number((r as unknown as Record<string, unknown>).owner_no ?? 0),
         owner: String(r.owner ?? ""),
         memberCount: Number(r.memberCount ?? 0),
         // 서버가 내려준 사용자별 표시제목 (1:1=상대닉네임), 없으면 name으로 폴백
@@ -326,6 +387,7 @@ const handleIncoming = (raw: string) => {
       Array.isArray(data.messages) ? data.messages : []
     ).map((msg) => ({
       type: "room",
+      user_no: Number(userNoOf(msg) ?? 0),
       nickname: String(msg?.nickname ?? ""),
       text: String(msg?.text ?? ""),
       timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
@@ -342,15 +404,23 @@ const handleIncoming = (raw: string) => {
     roomMessages.value[roomId] = history;
     // 방을 열면 참여자 목록도 함께 온다 → 읽음 숫자 실시간 재계산에 쓴다.
     // (이게 없으면 read_ack 를 받았을 때 숫자가 0으로 잘못 계산되어 한 번에 사라진다)
-    if (Array.isArray(data.members)) {
-      roomMembers.value[roomId] = data.members.map((m) => String(m));
+    if (Array.isArray(data.memberProfiles)) {
+      roomMembers.value[roomId] = data.memberProfiles
+        .map((m) => ({ user_no: Number(userNoOf(m) ?? 0), nickname: nickOf(m) }))
+        .filter((m) => m.user_no > 0);
+    } else if (Array.isArray(data.members)) {
+      roomMembers.value[roomId] = data.members
+        .map((m) => ({ user_no: Number(userNoOf(m) ?? 0), nickname: "" }))
+        .filter((m) => m.user_no > 0);
     }
   } else if (data.type === "room_message") {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
     const from = String(data.from ?? data.nickname ?? "");
+    const fromNo = Number(userNoOf(data as unknown) ?? 0);
     const msg: ChatMessage = {
       type: "room",
+      user_no: fromNo,
       nickname: from,
       text: String(data.text ?? ""),
       timestamp: typeof data.timestamp === "number" ? data.timestamp : Date.now(),
@@ -381,9 +451,17 @@ const handleIncoming = (raw: string) => {
   } else if (data.type === "room_members") {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
-    roomMembers.value[roomId] = Array.isArray(data.members)
-      ? data.members.map((m) => String(m))
-      : [];
+    if (Array.isArray(data.memberProfiles)) {
+      roomMembers.value[roomId] = data.memberProfiles
+        .map((m) => ({ user_no: Number(userNoOf(m) ?? 0), nickname: nickOf(m) }))
+        .filter((m) => m.user_no > 0);
+    } else {
+      roomMembers.value[roomId] = Array.isArray(data.members)
+        ? data.members
+            .map((m) => ({ user_no: Number(userNoOf(m) ?? 0), nickname: "" }))
+            .filter((m) => m.user_no > 0)
+        : [];
+    }
   } else if (data.type === "room_closed") {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
@@ -447,13 +525,14 @@ const handleIncoming = (raw: string) => {
   }
 };
 
-/** read_ack 이 실어 온 커서 맵을 파싱 ({닉네임: lastReadId}) */
+/** read_ack 이 실어 온 커서 맵을 파싱 ({user_no: lastReadId}) */
 const parseCursors = (raw: unknown): Record<string, number> => {
   const out: Record<string, number> = {};
   if (!raw || typeof raw !== "object") return out;
-  for (const [nick, value] of Object.entries(raw as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     const n = Number(value);
-    if (nick && Number.isFinite(n)) out[nick] = Math.max(0, Math.floor(n));
+    const no = toNo(key);
+    if (no != null && Number.isFinite(n)) out[String(no)] = Math.max(0, Math.floor(n));
   }
   return out;
 };
@@ -474,17 +553,17 @@ const parseCursors = (raw: unknown): Record<string, number> => {
  */
 const countUnread = (
   cursors: Record<string, number>,
-  participants: Array<string>,
-  sender: string,
+  participants: Array<ChatUser>,
+  senderNo: number,
   msgId?: number,
 ): number | null => {
   const id = typeof msgId === "number" ? msgId : 0;
   if (!id) return null;
   let n = 0;
   for (const raw of participants) {
-    const nick = String(raw ?? "").trim();
-    if (!nick || nick === sender) continue;
-    if ((cursors[nick] ?? 0) < id) n += 1;
+    const no = Number(userNoOf(raw) ?? 0);
+    if (!no || no === senderNo) continue;
+    if ((cursors[String(no)] ?? 0) < id) n += 1;
   }
   return n;
 };
@@ -513,9 +592,10 @@ const applyReadAck = (
   if (!box) return;
   const cursors = parseCursors(rawCursors);
   // read_ack 가 실어 온 참여자 목록을 우선 사용한다(항상 최신).
-  // 구버전 서버처럼 목록이 없으면 이미 받아둔 방 멤버 목록으로 폴백한다.
   const ackMembers = Array.isArray(rawMembers)
-    ? rawMembers.map((m) => String(m))
+    ? rawMembers
+        .map((m) => ({ user_no: Number(userNoOf(m) ?? 0), nickname: nickOf(m) }))
+        .filter((m) => m.user_no > 0)
     : [];
   const members = ackMembers.length > 0
     ? ackMembers
@@ -525,7 +605,7 @@ const applyReadAck = (
   box.forEach((m) => {
     // 내 메시지뿐 아니라 상대 메시지(message-other)도 갱신한다.
     // (상대 메시지 옆 숫자가 실시간으로 줄어들어야 한다)
-    const next = countUnread(cursors, members, m.nickname, m.msgId);
+    const next = countUnread(cursors, members, Number(m.user_no ?? 0), m.msgId);
     if (next === null) return; // id 모르면 기존 값 유지
     m.unreadCount = next;
   });
@@ -563,49 +643,46 @@ const attachHandlers = (socket: WebSocket) => {
  * 서버가 "있다면 그대로, 없으면 생성"으로 방을 확보한 뒤 방 번호를 돌려준다.
  * 실패/응답 없음 시 null 을 돌려주고 호출부가 창을 열지 않는다.
  */
-const requestOneToOneRoom = (peer: string): Promise<number | null> => {
-  const target = peer.trim();
-  if (!target) return Promise.resolve(null);
+const requestOneToOneRoom = (peerNo: number): Promise<number | null> => {
+  if (!Number.isInteger(peerNo) || peerNo <= 0) return Promise.resolve(null);
   const socket = ws;
   if (!socket || socket.readyState !== WebSocket.OPEN) return Promise.resolve(null);
   // 같은 상대를 연속으로 누른 경우 먼저 걸린 요청은 무시한다(창이 2개 뜨지 않도록)
-  pendingOneToOne.delete(target);
+  pendingOneToOne.delete(peerNo);
   return new Promise<number | null>((resolve) => {
     const timer = setTimeout(() => {
-      pendingOneToOne.delete(target);
+      pendingOneToOne.delete(peerNo);
       resolve(null);
     }, 5000);
-    pendingOneToOne.set(target, (roomId) => {
+    pendingOneToOne.set(peerNo, (roomId) => {
       clearTimeout(timer);
       resolve(roomId);
     });
     try {
-      socket.send(JSON.stringify({ type: "dm_room_open", withUser: target }));
+      socket.send(JSON.stringify({ type: "dm_room_open", withUserNo: peerNo }));
     } catch {
       clearTimeout(timer);
-      pendingOneToOne.delete(target);
+      pendingOneToOne.delete(peerNo);
       resolve(null);
     }
   });
 };
 
 // 번호방 액션 (메인 창의 단일 소켓으로 전송)
-// 방 이름은 직접 입력받지 않는다. 서버가 실제 멤버 기준으로
-// "참여자 이름 오름차순 쉼표 연결"을 만들어 rooms.name / room_members.display_name에 넣는다.
-// (이 이름이 자동 생성 규칙의 유일한 진실이라 규칙이 어긋날 여지가 없다)
-const createRoomAction = (members: string[] = []): boolean => {
+// 신 규격: memberNos(number[]) — 서버가 스냅샷으로 방제를 만든다.
+const createRoomAction = (members: Array<number | ChatUser> = []): boolean => {
   const cleanMembers = Array.isArray(members)
     ? members
-        .map((m) => String(m ?? "").trim())
-        .filter((m) => m && m !== nickname.value)
-        .slice(0, 50)
+        .map((m) => Number(userNoOf(m) ?? 0))
+        .filter((n) => Number.isInteger(n) && n > 0 && n !== myUserNo.value)
     : [];
-  if (cleanMembers.length === 0) return false;
+  const uniq = [...new Set(cleanMembers)].slice(0, 50);
+  if (uniq.length === 0) return false;
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   ws.send(
     JSON.stringify({
       type: "room_create",
-      members: cleanMembers,
+      memberNos: uniq,
     }),
   );
   return true;
@@ -689,8 +766,8 @@ const attemptReconnect = () => {
 
   // 연결 성공 시 처리
   socket.onopen = () => {
-    if (nickname.value) {
-      socket.send(JSON.stringify({ type: "join", nickname: nickname.value }));
+    if (loginId.value) {
+      socket.send(JSON.stringify({ type: "join", loginId: loginId.value }));
     }
     isConnected.value = true;
     connectionStatus.value = "연결됨";
@@ -705,22 +782,31 @@ const attemptReconnect = () => {
   attachHandlers(socket);
 };
 
-// 첫 화면(닉네임 입력)에서 호출하는 연결 함수
-const connect = (nicknameInput: string): boolean => {
-  const trimmed = nicknameInput.trim();
-  if (trimmed === "") return false;
+// 첫 화면(아이디 입력)에서 호출하는 연결 함수
+export const LOGIN_ID_RE = /^[A-Za-z0-9]{1,20}$/;
+const connect = (loginIdInput: string): boolean => {
+  const trimmed = loginIdInput.trim();
+  if (!LOGIN_ID_RE.test(trimmed)) {
+    joinError.value = "아이디는 영문+숫자, 최대 20자입니다.";
+    return false;
+  }
   joinError.value = "";
-  const nicknameChanged = nickname.value !== "" && nickname.value !== trimmed;
-  nickname.value = trimmed;
-  if (nicknameChanged) {
+  const loginChanged = loginId.value !== "" && loginId.value !== trimmed;
+  loginId.value = trimmed;
+  nickname.value = "";
+  myUserNo.value = null;
+  try {
+    localStorage.setItem(LOGIN_ID_STORAGE_KEY, trimmed);
+  } catch {
+    // 무시
+  }
+  if (loginChanged) {
     myRooms.value = [];
     roomMessages.value = {};
     roomUnread.value = {};
     roomMembers.value = {};
   }
   // 안읽은 건수는 서버 DB가 진실이므로 여기서 복원하지 않는다.
-  // join 응답의 unread_state로 서버 값이 도착하면 그때 적용된다.
-  // (닉네임이 바뀌면 이전 사용자의 배지를 먼저 비워야 새 계정과 섞이지 않는다)
   roomUnread.value = {};
   // 새 접속에서는 채팅창을 열 때마다 다시 조회한다.
   isManuallyDisconnected.value = false;
@@ -739,7 +825,7 @@ const connect = (nicknameInput: string): boolean => {
   const socket = new WebSocket("ws://localhost:8080");
   ws = socket;
   socket.onopen = () => {
-    socket.send(JSON.stringify({ type: "join", nickname: nickname.value }));
+    socket.send(JSON.stringify({ type: "join", loginId: loginId.value }));
     isConnected.value = true;
     connectionStatus.value = "연결됨";
     if (reconnectTimer.value) {
@@ -752,15 +838,40 @@ const connect = (nicknameInput: string): boolean => {
 };
 
 // ─── 사용자 관리: 추가/수정 (admin 전용) ───
-// 닉네임 + 탈퇴여부를 서버로 전송 (서버에서 upsert + 목록 재브로드캐스트)
-const upsertUser = (targetNickname: string, isDeleted: boolean): boolean => {
-  if (nickname.value !== "admin") return false;
-  const trimmed = targetNickname.trim().slice(0, 20);
-  if (!trimmed || !ws || ws.readyState !== WebSocket.OPEN) return false;
+// login_id(불변) + nickname + phone + user_name + 탈퇴여부
+const upsertUser = (
+  targetLoginId: string,
+  targetNickname: string,
+  isDeleted: boolean,
+  phone?: string | null,
+  userName?: string | null,
+): boolean => {
+  if (!isAdmin()) return false;
+  const id = targetLoginId.trim();
+  const nick = targetNickname.trim().slice(0, 20);
+  if (!LOGIN_ID_RE.test(id) || !nick) {
+    userUpsertResult.value = "아이디는 영문+숫자(최대20), 닉네임은 최대20자입니다.";
+    return false;
+  }
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   userUpsertResult.value = "";
   ws.send(
-    JSON.stringify({ type: "user_upsert", nickname: trimmed, isDeleted })
+    JSON.stringify({ type: "user_upsert", loginId: id, nickname: nick, isDeleted, phone: phone ?? null, userName: userName ?? null })
   );
+  return true;
+};
+
+// ─── 닉네임 변경 (본인 + admin) ───
+const renameUser = (targetNo: number, newNickname: string): boolean => {
+  const no = Number(targetNo);
+  const nick = newNickname.trim().slice(0, 20);
+  if (!Number.isInteger(no) || no <= 0 || !nick) {
+    userRenameResult.value = "닉네임을 입력하세요. (최대 20자)";
+    return false;
+  }
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  userRenameResult.value = "";
+  ws.send(JSON.stringify({ type: "user_rename", targetUserNo: no, newNickname: nick }));
   return true;
 };
 
@@ -811,6 +922,8 @@ const disconnect = () => {
  */
 export function useChatSocket() {
   return {
+    loginId,
+    myUserNo,
     nickname,
     isConnected,
     connectionStatus,
@@ -821,6 +934,7 @@ export function useChatSocket() {
     usersDetail,
     joinError,
     userUpsertResult,
+    userRenameResult,
     roomRenameError,
     isAdmin,
     myRooms,
@@ -849,5 +963,6 @@ export function useChatSocket() {
     requestOneToOneRoom,
     requestRoomHistory,
     upsertUser,
+    renameUser,
   };
 }

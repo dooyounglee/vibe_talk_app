@@ -8,10 +8,10 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: "submit", nickname: string): void;
+  (e: "submit", loginId: string): void;
 }>();
 
-const nicknameInput = ref("");
+const loginInput = ref("");
 const error = ref("");
 
 watch(
@@ -21,10 +21,12 @@ watch(
   }
 );
 
+const LOGIN_ID_RE = /^[A-Za-z0-9]{1,20}$/;
+
 const submit = () => {
-  const trimmed = nicknameInput.value.trim();
-  if (trimmed === "") {
-    error.value = "닉네임을 입력하세요.";
+  const trimmed = loginInput.value.trim();
+  if (!LOGIN_ID_RE.test(trimmed)) {
+    error.value = "아이디는 영문+숫자, 최대 20자입니다.";
     return;
   }
   error.value = "";
@@ -40,15 +42,15 @@ const onEnter = () => {
   <div class="nickname-screen">
     <div class="nickname-card">
       <h1 class="title">Vibe Talk</h1>
-      <p class="desc">사용할 닉네임을 입력하세요</p>
+      <p class="desc">사용할 아이디를 입력하세요</p>
       <input
-        v-model="nicknameInput"
+        v-model="loginInput"
         class="nickname-input"
-        placeholder="닉네임 입력"
+        placeholder="아이디 입력 (영문+숫자)"
         maxlength="20"
         @keyup.enter="onEnter"
       />
-      <button class="start-button" :disabled="!nicknameInput.trim()" @click="submit">
+      <button class="start-button" :disabled="!loginInput.trim()" @click="submit">
         입장하기
       </button>
       <p v-if="error" class="error">{{ error }}</p>

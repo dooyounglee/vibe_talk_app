@@ -10,9 +10,9 @@ import {
   type ChatBus,
   type ChatBusHandler,
 } from "../chatBus";
-import type { ChatMessage } from "../types/chat";
+import type { ChatMessage, ChatUser } from "../types/chat";
 import { roomDisplayName, truncateRoomTitle, ROOM_TITLE_INPUT_MAX_LENGTH } from "../types/chat";
-import { NICKNAME_STORAGE_KEY } from "../constants";
+import { LOGIN_ID_STORAGE_KEY } from "../constants";
 import { useChatSocket } from "./useChatSocket";
 import { useWindowFocus } from "./useWindowFocus";
 
@@ -21,14 +21,15 @@ const LINK_TIMEOUT_MS = 3500;
 export function useChatRoom(roomId: { readonly value: number }) {
   const store = useChatSocket();
   const myMainId = currentMainIdFromUrl();
-  const direct = computed(() => store.nickname.value.trim() !== "");
+  const direct = computed(() => store.loginId.value.trim() !== "");
   const effectiveRoomId = computed(() => {
     if (Number.isInteger(roomId.value) && roomId.value > 0) return roomId.value;
     return currentRoomIdFromUrl() ?? 0;
   });
   const busMessages = ref<ChatMessage[]>([]);
-  const busNickname = ref(localStorage.getItem(NICKNAME_STORAGE_KEY) ?? "");
-  const busMembers = ref<string[]>([]);
+  const busUserNo = ref<number | null>(null);
+  const busNickname = ref(localStorage.getItem(LOGIN_ID_STORAGE_KEY) ?? "");
+  const busMembers = ref<ChatUser[]>([]);
   const busRoomName = ref("");
   const busConnectionStatus = ref("메인 창에 연결 중...");
   const busIsConnected = ref(false);
@@ -44,9 +45,10 @@ export function useChatRoom(roomId: { readonly value: number }) {
     }
   };
   const applyState = (
-    nick: string, rname: string, msgs: ChatMessage[],
-    mems: string[], status: string, connected: boolean,
+    userNo: number | null, nick: string, rname: string, msgs: ChatMessage[],
+    mems: ChatUser[], status: string, connected: boolean,
   ) => {
+    busUserNo.value = userNo;
     busNickname.value = nick;
     busRoomName.value = rname;
     busMessages.value = [...msgs];
@@ -107,7 +109,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
     if (msg.kind === "room-state") {
       if (msg.roomId !== effectiveRoomId.value) return;
       applyState(
-        msg.myNickname, msg.roomName, msg.messages,
+        msg.myUserNo, msg.myNickname, msg.roomName, msg.messages,
         msg.members, msg.connectionStatus, msg.isConnected,
       );
     } else if (msg.kind === "main-ready") {
@@ -156,7 +158,10 @@ export function useChatRoom(roomId: { readonly value: number }) {
     // 화면 표기는 20자까지 축약하되, 목록과 창 제목이 서로 어긋나지 않게 같은 함수를 쓴다.
     return roomDisplayName(info);
   });
-  const members: ComputedRef<string[]> = computed(() =>
+  const myUserNo: ComputedRef<number | null> = computed(() =>
+    direct.value ? store.myUserNo.value : busUserNo.value,
+  );
+  const members: ComputedRef<ChatUser[]> = computed(() =>
     direct.value
       ? (store.roomMembers.value[effectiveRoomId.value] ?? [])
       : busMembers.value,
@@ -169,7 +174,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
   );
   const hasSession: ComputedRef<boolean> = computed(() =>
     direct.value
-      ? store.nickname.value.trim() !== ""
+      ? store.loginId.value.trim() !== ""
       : linked.value || busNickname.value.trim() !== "",
   );
 
@@ -267,6 +272,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
 
   return {
     messages,
+    myUserNo,
     myNickname,
     roomName: rname,
     members,

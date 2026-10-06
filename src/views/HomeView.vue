@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { WebviewWindow as WebviewWindowInstance } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, type CloseRequestedEvent } from "@tauri-apps/api/window";
-import type { MyStatus, RoomInfo } from "../types/chat";
+import type { ChatUser, MyStatus, RoomInfo } from "../types/chat";
 import { MY_STATUS_OPTIONS, roomRawName } from "../types/chat";
 import NicknameView from "../components/NicknameView.vue";
 import UserListView from "../components/UserListView.vue";
@@ -23,13 +23,15 @@ import {
   type ChatBus,
   type ChatBusHandler,
 } from "../chatBus";
-import { MAIN_ID_STORAGE_KEY, NICKNAME_STORAGE_KEY } from "../constants";
+import { LOGIN_ID_STORAGE_KEY, MAIN_ID_STORAGE_KEY } from "../constants";
 
 // 이 메인 창이 유일한 WebSocket 소유자.
 // 채팅방 창(별도 윈도우)은 소켓을 만들지 않고 이벤트 버스로 상태를 받아간다.
 // NOTE: 1:1 대화도 방 하나이므로 채팅창 종류는 '방 창' 하나뿐이다.
 const {
   nickname,
+  loginId,
+  myUserNo,
   isConnected,
   connectionStatus,
   myStatus,
@@ -39,6 +41,7 @@ const {
   usersDetail,
   joinError,
   userUpsertResult,
+  userRenameResult,
   isAdmin,
   myRooms,
   roomMessages,
@@ -60,6 +63,7 @@ const {
   renameRoom,
   sendRoom,
   upsertUser,
+  renameUser,
 } = useChatSocket();
 
 const router = useRouter();
@@ -224,6 +228,7 @@ const broadcastRoom = (roomId: number) => {
     kind: "room-state",
     roomId,
     roomName: (info?.displayName?.trim() ? info.displayName : info?.name) ?? "",
+    myUserNo: myUserNo.value,
     myNickname: nickname.value,
     messages: [...(roomMessages.value[roomId] ?? [])],
     members: [...(roomMembers.value[roomId] ?? [])],
@@ -253,14 +258,14 @@ const syncTauriRoomTitles = () => {
 // 1:1도 방 하나이므로 같은 방식으로 처리한다:
 //   이미 만들어진 방이 있으면 곧바로 열고, 없으면 서버에 방을 만들어 달라고 요청한다.
 // (메시지 0개인 1:1방은 '내 채팅방' 목록에서 숨기므로 빈 방이 눈에 보이지 않는다)
-const handleOpenChat = (user: string) => {
-  if (!user) return;
-  const existing = findOneToOneRoomId(user);
+const handleOpenChat = (user: ChatUser) => {
+  if (!user || !Number.isInteger(user.user_no)) return;
+  const existing = findOneToOneRoomId(user.nickname);
   if (existing !== null) {
     openRoomWindow(existing, true);
     return;
   }
-  void requestOneToOneRoom(user)
+  void requestOneToOneRoom(user.user_no)
     .then((roomId) => {
       if (roomId !== null) openRoomWindow(roomId, true);
     })
@@ -270,11 +275,10 @@ const handleOpenChat = (user: string) => {
 };
 
 const handleNicknameSubmit = (value: string) => {
+  // value = 아이디(영문+숫자). connect()가 로컬 저장까지 처리한다.
   const ok = connect(value);
   if (ok) {
     entered.value = true;
-    // 새 창으로 열리는 1:1 채팅방이 닉네임을 읽어갈 수 있도록 저장
-    localStorage.setItem(NICKNAME_STORAGE_KEY, nickname.value);
   }
 };
 
@@ -326,7 +330,7 @@ const handleLeave = () => {
     // 무시
   }
   disconnect();
-  localStorage.removeItem(NICKNAME_STORAGE_KEY);
+  localStorage.removeItem(LOGIN_ID_STORAGE_KEY);
   // 열려 있던 채팅방 창들을 함께 닫는다
   closeAllRoomWindows();
   entered.value = false;
@@ -504,9 +508,9 @@ onMounted(() => {
   // 자동 접속하면 같은 닉네임의 두 번째 소켓이 생기기 때문이다.
   const isPopupWindow = window.opener != null && !window.opener.closed;
   if (!isPopupWindow) {
-    const saved = localStorage.getItem(NICKNAME_STORAGE_KEY);
+    const saved = localStorage.getItem(LOGIN_ID_STORAGE_KEY);
     if (saved && saved.trim() !== "") {
-      if (nickname.value === saved && isConnected.value) {
+      if (loginId.value === saved && isConnected.value) {
         entered.value = true;
       } else {
         const ok = connect(saved);
@@ -547,12 +551,12 @@ watch(
 // - showCreateModal: 팝업 표시 여부
 // - createModalInitial: 팝업에 미리 체크해 둘 사용자 (사용자 우클릭/더보기 경유 시 1명)
 const showCreateModal = ref(false);
-const createModalInitial = ref<string[]>([]);
+const createModalInitial = ref<number[]>([]);
 // 방 생성 요청 직후 서버의 room_created/my_rooms 반영을 기다리는 동안,
 // 새로 생긴 방을 자동으로 열어주기 위한 대기 플래그
 const pendingAutoOpen = ref(false);
 
-const openCreateModal = (preselected: string[] = []) => {
+const openCreateModal = (preselected: number[] = []) => {
   createModalInitial.value = preselected;
   showCreateModal.value = true;
 };
@@ -562,7 +566,7 @@ const closeCreateModal = () => {
   createModalInitial.value = [];
 };
 
-const handleConfirmCreateRoom = (payload: { members: string[] }) => {
+const handleConfirmCreateRoom = (payload: { members: number[] }) => {
   const ok = createRoom(payload.members);
   if (ok) {
     pendingAutoOpen.value = true;
@@ -572,8 +576,9 @@ const handleConfirmCreateRoom = (payload: { members: string[] }) => {
 };
 
 // 사용자 목록에서 "방 만들기" 선택 시: 해당 사용자를 미리 체크한 팝업을 연다
-const handleCreateRoomWith = (user: string) => {
-  openCreateModal([user]);
+const handleCreateRoomWith = (user: ChatUser) => {
+  if (!Number.isInteger(user.user_no)) return;
+  openCreateModal([user.user_no]);
 };
 
 // ─── 방제목 변경 (사용자별 — 나에게만 적용) ───
@@ -602,8 +607,19 @@ const handleConfirmRename = (title: string) => {
 };
 
 // ─── 사용자 관리: 추가/수정 (admin 전용) ───
-const handleUpsertUser = (payload: { nickname: string; isDeleted: boolean }) => {
-  upsertUser(payload.nickname, payload.isDeleted);
+const handleUpsertUser = (payload: {
+  loginId: string;
+  nickname: string;
+  phone: string | null;
+  userName: string | null;
+  isDeleted: boolean;
+}) => {
+  upsertUser(payload.loginId, payload.nickname, payload.isDeleted, payload.phone, payload.userName);
+};
+
+// ─── 닉네임 변경 (본인 + admin) ───
+const handleRenameUser = (payload: { user_no: number; nickname: string }) => {
+  renameUser(payload.user_no, payload.nickname);
 };
 
 // 내가 만든 방이 목록에 반영되면 자동으로 새 창을 연다
@@ -705,6 +721,7 @@ const visibleRooms = computed<RoomInfo[]>(() =>
     />
     <UserListView
       v-else
+      :my-user-no="myUserNo"
       :my-nickname="nickname"
       :users="userlist"
       :online-users="onlineUsers"
@@ -713,11 +730,13 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       :is-admin="isAdmin()"
       :users-detail="usersDetail"
       :upsert-result="userUpsertResult"
+      :rename-result="userRenameResult"
       @open-chat="handleOpenChat"
       @create-room-with="handleCreateRoomWith"
       @reconnect="manualReconnect"
       @disconnect="handleLeave"
       @upsert-user="handleUpsertUser"
+      @rename-user="handleRenameUser"
     />
     <!-- 방 만들기 팝업: 사용자 1명 이상 체크 후 확인 (방 이름은 자동 생성) -->
     <CreateRoomModal
@@ -725,6 +744,7 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       :users="userlist"
       :initial-selected="createModalInitial"
       :my-nickname="nickname"
+      :my-user-no="myUserNo"
       @confirm="handleConfirmCreateRoom"
       @cancel="closeCreateModal"
     />

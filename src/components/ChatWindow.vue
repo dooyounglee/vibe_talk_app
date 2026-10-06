@@ -4,6 +4,7 @@ import type { ChatMessage } from "../types/chat";
 
 const props = defineProps<{
   peer: string;
+  myUserNo: number | null;
   myNickname: string;
   messages: ChatMessage[];
   connectionStatus: string;
@@ -66,7 +67,7 @@ watch(
           v-for="(msg, index) in messages"
           :key="index"
           class="message-row"
-          :class="msg.nickname === myNickname ? 'row-self' : 'row-other'"
+          :class="msg.user_no === myUserNo ? 'row-self' : 'row-other'"
         >
           <!-- 카톡식 읽음 표시: 아직 안 읽은 사람이 있으면 숫자를 붙인다.
                내 메시지(message-self)와 상대 메시지(message-other) 모두 붙는다.
@@ -81,10 +82,10 @@ watch(
           >{{ msg.unreadCount }}</span>
           <div
             class="bubble"
-            :class="msg.nickname === myNickname ? 'message-self' : 'message-other'"
+            :class="msg.user_no === myUserNo ? 'message-self' : 'message-other'"
           >
             <div class="message-content">
-              <span class="nickname" v-if="msg.nickname !== myNickname">
+              <span class="nickname" v-if="msg.user_no !== myUserNo">
                 [{{ msg.nickname }}]
               </span>
               {{ msg.text }}

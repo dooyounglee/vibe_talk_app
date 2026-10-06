@@ -1,5 +1,6 @@
 export interface ChatMessage {
   type: string;
+  user_no: number;
   nickname: string;
   text: string;
   timestamp?: number;
@@ -16,9 +17,15 @@ export interface ChatMessage {
   unreadCount?: number;
 }
 
+export interface ChatUser {
+  user_no: number;
+  nickname: string;
+}
+
 export interface RoomInfo {
   roomId: number;
   name: string;
+  owner_no: number;
   owner: string;
   memberCount: number;
   /** 사용자별 표시 제목 (1:1=상대 닉네임, 3명 이상=전체 참여자 이름 연결, 없으면 name으로 폴백) */

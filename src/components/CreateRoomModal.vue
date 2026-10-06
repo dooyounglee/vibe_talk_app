@@ -1,49 +1,43 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import { truncateRoomTitle } from "../types/chat";
+import type { ChatUser } from "../types/chat";
+import UserSearchInput from "./UserSearchInput.vue";
 
 const props = defineProps<{
-  users: string[];
-  initialSelected?: string[];
+  users: ChatUser[];
+  initialSelected?: number[];
   myNickname?: string;
+  myUserNo?: number | null;
 }>();
 
 const emit = defineEmits<{
-  (e: "confirm", payload: { members: string[] }): void;
+  (e: "confirm", payload: { members: number[] }): void;
   (e: "cancel"): void;
 }>();
 
-const selected = ref<Set<string>>(new Set(props.initialSelected ?? []));
+const selected = ref<Set<number>>(new Set(props.initialSelected ?? []));
 const error = ref("");
 
-const toggle = (user: string) => {
+const toggle = (userNo: number) => {
   const next = new Set(selected.value);
-  if (next.has(user)) next.delete(user);
-  else next.add(user);
+  if (next.has(userNo)) next.delete(userNo);
+  else next.add(userNo);
   selected.value = next;
   error.value = "";
 };
 
-// ─── 사용자 검색 ───
+// ─── 사용자 검색 (UserSearchInput 공통컴포넌트) ───
+// 검색창 UI/필터링은 컴포넌트가 담당하고, 여기에는 v-model 연결 상태만 남긴다.
 // 검색 결과(filteredUsers)와 선택 상태(selected)는 서로 다른 상태다.
 // 검색어를 바꿔도 selected는 그대로 유지되므로, 여러 번 검색해도 위 칩 목록에서
 // 현재 체크된 사용자를 그대로 확인할 수 있다.
 // (모달은 HomeView에서 v-if로 매번 새로 마운트되므로 keyword는 자동 초기화된다)
-const keyword = ref("");
-const searchInputRef = ref<HTMLInputElement | null>(null);
-
-// 검색 결과: 대소문자 무시 부분 일치 + 닉네임 오름차순
-// (정렬 기준은 UserListView.vue의 sortedUsers와 동일하게 localeCompare)
-const filteredUsers = computed<string[]>(() => {
-  const q = keyword.value.trim().toLowerCase();
-  const list = q
-    ? props.users.filter((u) => u.toLowerCase().includes(q))
-    : props.users;
-  return [...list].sort((a, b) => a.localeCompare(b));
-});
+const keyword = ref(""); // v-model:keyword 부모 측 저장소 (값 변경은 컴포넌트가 수행)
+const filteredUsers = ref<ChatUser[]>([]); // v-model:results 부모 측 저장소 (컴포넌트가 결과를 채운다)
 
 // 칩의 [×]와 목록 체크박스는 같은 동작(토글)이다.
-const removeChip = (user: string) => toggle(user);
+const removeChip = (userNo: number) => toggle(userNo);
 
 // 선택한 사용자 한꺼번에 해제
 const clearSelected = () => {
@@ -51,34 +45,22 @@ const clearSelected = () => {
   error.value = "";
 };
 
-// Esc: 검색어가 있으면 검색어만 지우고, 없을 때만 모달을 닫는다.
+// Esc: 검색어 정리는 컴포넌트 내부에서 처리하고, 여기로 올 때는 검색어가 이미 없다 → 모달 닫기
 const onEsc = () => {
-  if (keyword.value) keyword.value = "";
-  else emit("cancel");
+  emit("cancel");
 };
-
-// 열리면 검색창에 자동 포커스 (박스를 클릭하지 않고 바로 타이핑 가능)
-onMounted(() => searchInputRef.value?.focus());
-
-watch(
-  () => props.initialSelected,
-  (v) => {
-    selected.value = new Set(v ?? []);
-    keyword.value = "";
-  },
-);
 
 // ─── 방 이름 자동 생성 ───
 // 1:1방(나 + 선택 1명): 서로의 이름이 뜸(서버가 상대 닉네임을 display_name으로 저장)
 // 3명 이상: 참여자 이름 전체를 오름차순으로 쉼표 연결 (arr.join(','))
 // DB/서버로는 전체 이름을 그대로 보내고, 화면 미리보기만 20자까지 축약한다.
-const memberList = computed<string[]>(() => Array.from(selected.value));
+const memberList = computed<number[]>(() => Array.from(selected.value));
 const participantNames = computed<string[]>(() => {
   const names = new Set<string>();
   const me = props.myNickname?.trim();
   if (me) names.add(me);
-  for (const user of memberList.value) {
-    if (user) names.add(user);
+  for (const u of props.users) {
+    if (memberList.value.includes(u.user_no)) names.add(u.nickname);
   }
   return Array.from(names).sort((a, b) => a.localeCompare(b));
 });
@@ -92,7 +74,8 @@ const previewName = computed<string>(() =>
 const previewHint = computed<string>(() => {
   if (memberList.value.length === 0) return "참여자를 선택하면 방 이름이 자동 생성됩니다.";
   if (isOneToOne.value) {
-    return `나에게는 "${memberList.value[0]}", 상대에게는 내 이름이 방 이름으로 보입니다.`;
+    const peer = props.users.find((u) => u.user_no === memberList.value[0]);
+    return `나에게는 "${peer?.nickname ?? ""}", 상대에게는 내 이름이 방 이름으로 보입니다.`;
   }
   return `${participantNames.value.length}명 참여 (이름 오름차순) · 방 이름은 자동 생성됩니다.`;
 });
@@ -134,13 +117,13 @@ const confirm = () => {
           아래 목록에서 초대할 사용자를 선택하세요.
         </p>
         <div v-else class="chip-list">
-          <span v-for="user in memberList" :key="user" class="chip">
-            <span class="chip-avatar">{{ user.slice(0, 1) }}</span>
-            <span class="chip-name" :title="user">{{ user }}</span>
+          <span v-for="no in memberList" :key="no" class="chip">
+            <span class="chip-avatar">{{ (props.users.find((u) => u.user_no === no)?.nickname ?? "").slice(0, 1) }}</span>
+            <span class="chip-name" :title="props.users.find((u) => u.user_no === no)?.nickname ?? ''">{{ props.users.find((u) => u.user_no === no)?.nickname ?? no }}</span>
             <button
               class="chip-x"
-              :title="user + ' 선택 해제'"
-              @click="removeChip(user)"
+              :title="(props.users.find((u) => u.user_no === no)?.nickname ?? '') + ' 선택 해제'"
+              @click="removeChip(no)"
             >
               ×
             </button>
@@ -148,41 +131,28 @@ const confirm = () => {
         </div>
       </div>
 
-      <!-- ② 검색: 입력값은 filteredUsers(복사본)만 필터링하므로 selected는 건드리지 않는다 -->
-      <div class="search-row">
-        <span class="search-icon">🔍</span>
-        <input
-          ref="searchInputRef"
-          v-model="keyword"
-          class="search-input"
-          type="text"
-          placeholder="사용자 검색"
-          @keyup.esc="onEsc"
-        />
-        <button
-          v-if="keyword"
-          class="search-clear"
-          title="검색어 지우기"
-          @click="keyword = ''"
-        >
-          ×
-        </button>
-      </div>
+      <!-- ② 검색: UserSearchInput이 결과(filteredUsers)를 채우고, 선택(selected)은 여기서 계속 관리한다 -->
+      <UserSearchInput
+        v-model:keyword="keyword"
+        v-model:results="filteredUsers"
+        :users="users"
+        @esc="onEsc"
+      />
 
       <p v-if="users.length === 0" class="empty">현재 초대 가능한 사용자가 없습니다.</p>
       <p v-else-if="filteredUsers.length === 0" class="empty">
         "{{ keyword }}" 검색 결과가 없습니다.
       </p>
       <ul v-else class="select-list">
-        <li v-for="user in filteredUsers" :key="user" class="select-item">
+        <li v-for="user in filteredUsers" :key="user.user_no" class="select-item">
           <label>
             <input
               type="checkbox"
-              :checked="selected.has(user)"
-              @change="toggle(user)"
+              :checked="selected.has(user.user_no)"
+              @change="toggle(user.user_no)"
             />
-            <span class="avatar">{{ user.slice(0, 1) }}</span>
-            <span class="name">{{ user }}</span>
+            <span class="avatar">{{ user.nickname.slice(0, 1) }}</span>
+            <span class="name">{{ user.nickname }}</span>
           </label>
         </li>
       </ul>
@@ -322,36 +292,6 @@ const confirm = () => {
   cursor: pointer;
 }
 .chip-x:hover { color: #d33; }
-
-/* ─── 검색 영역 ─── */
-.search-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 10px 0 8px;
-}
-.search-icon { font-size: 13px; flex-shrink: 0; }
-.search-input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 10px;
-  font-size: 14px;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  box-sizing: border-box;
-}
-.search-input:focus { outline: none; border-color: #007bff; }
-.search-clear {
-  border: none;
-  background: none;
-  color: #999;
-  font-size: 16px;
-  line-height: 1;
-  padding: 0 4px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.search-clear:hover { color: #d33; }
 
 .select-list {
   list-style: none;
