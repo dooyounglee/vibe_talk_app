@@ -40,7 +40,7 @@ export interface RoomInfo {
 
 // ─── 내 상태 (접속/오프라인/회의중/바쁨/자리비움) ───
 // 메인 화면 상단 드롭다운에서 고른다.
-// 서버로 보내지 않으므로 다른 사람에게는 보이지 않고, 이 기기에만 저장된다.
+// status_set으로 서버에 전파되어 다른 사용자에게도 보이고, 이 브라우저에도 저장된다.
 export type MyStatus = "online" | "offline" | "meeting" | "busy" | "away";
 
 export const DEFAULT_MY_STATUS: MyStatus = "online";
@@ -68,6 +68,25 @@ export function normalizeMyStatus(value: unknown): MyStatus {
 export function myStatusLabel(value: unknown): string {
   const v = normalizeMyStatus(value);
   return MY_STATUS_OPTIONS.find((o) => o.value === v)?.label ?? DEFAULT_MY_STATUS;
+}
+
+/**
+ * 상태 → 이모티콘 (임시값 — 나중에 수정 가능, 지금은 자리만 확보)
+ * 이모지 자체는 다색이라 회색/빨강 등 색상 구분은 각 화면의 CSS
+ * (`filter: grayscale` 등)로 보정한다.
+ */
+export const MY_STATUS_EMOJI: Record<MyStatus, string> = {
+  online: "🙂",
+  offline: "👻",
+  meeting: "📝",
+  busy: "🥵",
+  away: "🕟",
+};
+
+/** 화면 표기: 상태명(이모티콘) — 예) '접속(🙂)' */
+export function myStatusText(value: unknown): string {
+  const label = myStatusLabel(value);
+  return `${label}(${MY_STATUS_EMOJI[normalizeMyStatus(value)]})`;
 }
 
 /** 화면 표기: 방 제목 최대 글자 수 (초과분은 "..."로 생략) */

@@ -1,6 +1,13 @@
 import { ref } from "vue";
 import type { ChatMessage, ChatUser, MyStatus, RoomInfo } from "../types/chat";
-import { DEFAULT_MY_STATUS, ROOM_TITLE_INPUT_MAX_LENGTH, normalizeMyStatus } from "../types/chat";
+import {
+  DEFAULT_MY_STATUS,
+  MY_STATUS_EMOJI,
+  MY_STATUS_OPTIONS,
+  ROOM_TITLE_INPUT_MAX_LENGTH,
+  myStatusText,
+  normalizeMyStatus,
+} from "../types/chat";
 import { LOGIN_ID_STORAGE_KEY, MY_STATUS_STORAGE_KEY } from "../constants";
 
 // ─── 모듈 싱글톤 상태 ───
@@ -13,8 +20,8 @@ const nickname = ref("");
 
 // ─── 내 상태 (접속/오프라인/회의중/바쁨/자리비움) ───
 // 메인 화면 상단 드롭다운에서 고른 값.
-// 서버로 보내지 않으므로 다른 사람에게는 보이지 않고, 이 브라우저에만 남긴다.
-// (기존 localStorage 사용처와 동일한 이유로 서버 미사용)
+// localStorage에 남겨 새로고침 후에도 유지하고, status_set으로 서버에도 보내
+// 다른 사용자에게 상태를 보여준다.
 // localStorage 접근은 사용자가 저장을 막은 환경에서 예외가 날 수 있어 전부 try/catch로 감싼다.
 const loadMyStatus = (): MyStatus => {
   try {
@@ -26,7 +33,7 @@ const loadMyStatus = (): MyStatus => {
 };
 const myStatus = ref<MyStatus>(loadMyStatus());
 
-/** 내 상태 변경: 화면 상태를 갱신하고 이 브라우저에 저장한다(서버 전송 없음) */
+/** 내 상태 변경: 화면 상태를 갱신하고 이 브라우저에 저장한 뒤 서버(status_set)로도 전파한다 */
 const setMyStatus = (value: MyStatus) => {
   const next = normalizeMyStatus(value);
   myStatus.value = next;
@@ -35,11 +42,36 @@ const setMyStatus = (value: MyStatus) => {
   } catch {
     // 저장 실패(저장 차단 환경 등)는 무시한다. 화면 반영만으로 동작은 충분하다.
   }
+  // 서버 전파 — 다른 사용자의 '사용자' 탭에 내 상태가 보이도록 한다.
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify({ type: "status_set", status: next }));
+    } catch {
+      // 전송 실패는 무시한다 — 다음 상태 변경 시 다시 전송된다.
+    }
+  }
 };
 // userlist: DB 등록 사용자 전체 (탈퇴 제외) — '사용자' 탭에 표시
 const userlist = ref<Array<ChatUser>>([]);
 // onlineUsers: 현재 접속중 user_no 집합
 const onlineUsers = ref<Array<number>>([]);
+// userStatuses: 서버가 userlist에 실어 보내는 사용자별 상태 (user_no → 상태)
+const userStatuses = ref<Record<number, MyStatus>>({});
+
+/**
+ * userNo의 최종 상태: 본인은 내 드롭다운 값이 우선하고, 나머지는 서버 방송값을 쓴다.
+ * 맵에 없거나 접속 중이 아닌 사용자는 자동으로 offline 취급한다 (접속 해제 자동 반영).
+ */
+const statusOf = (userNo: number): MyStatus => {
+  if (userNo === myUserNo.value) return myStatus.value;
+  const raw: MyStatus | undefined = userStatuses.value[userNo];
+  if (raw === undefined || !onlineUsers.value.includes(userNo)) return "offline";
+  return MY_STATUS_OPTIONS.some((o) => o.value === raw) ? raw : "offline";
+};
+/** userNo 상태 이모티콘 — 예) '🙂' */
+const statusEmojiOf = (userNo: number): string => MY_STATUS_EMOJI[statusOf(userNo)];
+/** userNo 상태문구 — '접속(🙂)' 형태 */
+const statusTextOf = (userNo: number): string => myStatusText(statusOf(userNo));
 // usersDetail: admin 전용 전체 사용자(탈퇴 포함) — '사용자'탭 관리용
 export interface UserDetail {
   user_no: number;
@@ -196,6 +228,8 @@ interface IncomingPayload {
   text?: string;
   users?: Array<ChatUser>;
   onlineUsers?: Array<number>;
+  /** 서버가 userlist에 실어 보내는 사용자별 상태 (user_no → 상태) */
+  userStatuses?: Record<string, MyStatus>;
   usersDetail?: Array<UserDetail & { user_name?: string | null; user_no?: number }>;
   isDeleted?: boolean;
   is_deleted?: number;
@@ -282,7 +316,7 @@ const handleIncoming = (raw: string) => {
       resolve(roomId);
     }
   } else if (data.type === "userlist") {
-    // users = [{user_no, nickname}], onlineUsers = [user_no]
+    // users = [{user_no, nickname}], onlineUsers = [user_no], userStatuses = {user_no: status}
     const users: Array<ChatUser> = Array.isArray(data.users) ? data.users : [];
     const online: Array<number> = Array.isArray(data.onlineUsers) ? data.onlineUsers : [];
     const clean = users
@@ -290,6 +324,17 @@ const handleIncoming = (raw: string) => {
       .filter((u) => u.user_no > 0 && u.nickname);
     userlist.value = clean.filter((u) => u.user_no !== myUserNo.value);
     onlineUsers.value = online.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0 && n !== myUserNo.value);
+    // 사용자별 상태: 유효한 값만 남긴다 (없는 사용자는 offline으로 취급되도록 비워 둔다)
+    const statuses: Record<number, MyStatus> = {};
+    const rawStatuses = data.userStatuses;
+    if (rawStatuses && typeof rawStatuses === "object") {
+      for (const [key, value] of Object.entries(rawStatuses)) {
+        const no = Number(key);
+        if (!Number.isInteger(no) || no <= 0) continue;
+        if (MY_STATUS_OPTIONS.some((o) => o.value === value)) statuses[no] = value;
+      }
+    }
+    userStatuses.value = statuses;
   } else if (data.type === "userlist_detail") {
     // admin 전용: 탈퇴 포함 전체 사용자 상세 (본인 제외)
     const detail = Array.isArray(data.usersDetail) ? data.usersDetail : [];
@@ -931,6 +976,9 @@ export function useChatSocket() {
     setMyStatus,
     userlist,
     onlineUsers,
+    userStatuses,
+    statusEmojiOf,
+    statusTextOf,
     usersDetail,
     joinError,
     userUpsertResult,

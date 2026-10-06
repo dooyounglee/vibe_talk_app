@@ -4,7 +4,8 @@ export const LOGIN_ID_STORAGE_KEY = "vibe_talk_login_id";
 export const MAIN_ID_STORAGE_KEY = "vibe_talk_main_id";
 /**
  * 내 상태 저장 키 (localStorage).
- * 서버에 보내지 않고 이 브라우저에만 남겨 새로고침 후에도 유지된다.
+ * status_set으로 서버에도 전파되지만, 새로고침 후 드롭다운 복원을 위해
+ * 이 브라우저에도 남긴다.
  */
 export const MY_STATUS_STORAGE_KEY = "vibe_talk_my_status";
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import type { ChatUser } from "../types/chat";
+import { MY_STATUS_EMOJI, MY_STATUS_OPTIONS, myStatusText } from "../types/chat";
+import type { ChatUser, MyStatus } from "../types/chat";
 import type { UserDetail } from "../composables/useChatSocket";
 import UserSearchInput from "./UserSearchInput.vue";
 
@@ -9,6 +10,8 @@ const props = defineProps<{
   myNickname: string;
   users: ChatUser[];
   onlineUsers: number[];
+  /** 서버가 방송한 사용자별 상태 (user_no → 상태) */
+  userStatuses: Record<number, MyStatus>;
   connectionStatus: string;
   isConnected: boolean;
   isAdmin: boolean;
@@ -45,6 +48,17 @@ const sortedUsers = computed<DisplayUser[]>(() => {
     : displayUsers.value;
   return [...base].sort((a, b) => a.nickname.localeCompare(b.nickname));
 });
+
+// ─── 사용자 상태 (이모티콘/상태문구) ───
+// 서버가 방송한 userStatuses에서 상태를 읽는다. 맵에 없거나 접속 중이 아닌
+// 사용자는 offline으로 취급한다(접속 해제 자동 반영). 목록에는 본인이 제외되므로 별도 처리 없다.
+const statusOf = (userNo: number): MyStatus => {
+  const raw: MyStatus | undefined = props.userStatuses[userNo];
+  if (raw === undefined || !props.onlineUsers.includes(userNo)) return "offline";
+  return MY_STATUS_OPTIONS.some((o) => o.value === raw) ? raw : "offline";
+};
+const statusEmojiOf = (userNo: number): string => MY_STATUS_EMOJI[statusOf(userNo)];
+const statusTextOf = (userNo: number): string => myStatusText(statusOf(userNo));
 
 // 우클릭/더보기 메뉴 상태 (어느 사용자에 대한 메뉴인지)
 const menuUser = ref<ChatUser | null>(null);
@@ -200,8 +214,8 @@ const confirmRenameModal = () => {
         <span
           class="presence"
           :class="onlineUsers.includes(u.user_no) ? 'online' : 'offline'"
-          :title="onlineUsers.includes(u.user_no) ? '접속중' : '오프라인'"
-        ></span>
+          :title="statusTextOf(u.user_no)"
+        >{{ statusEmojiOf(u.user_no) }}</span>
         <button
           v-if="isAdmin"
           class="edit-btn"
@@ -369,14 +383,18 @@ const confirmRenameModal = () => {
   font-size: 15px;
   word-break: break-all;
 }
+/* 상태 이모티콘: 원래 초록/회색 동그라리를 이모티콘으로 대체한다.
+   회색 톤 보정은 offline(접속 해제)에 grayscale 필터로 한다. */
 .presence {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
+  width: auto;
+  height: auto;
+  background: none;
+  border-radius: 0;
+  font-size: 11px;
+  line-height: 1;
   flex-shrink: 0;
 }
-.presence.online { background: #28a745; }
-.presence.offline { background: #ccc; }
+.presence.offline { filter: grayscale(1); opacity: 0.7; }
 .more-btn {
   border: 1px solid #ddd;
   background: #fff;

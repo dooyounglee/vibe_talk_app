@@ -5,7 +5,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { WebviewWindow as WebviewWindowInstance } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, type CloseRequestedEvent } from "@tauri-apps/api/window";
 import type { ChatUser, MyStatus, RoomInfo } from "../types/chat";
-import { MY_STATUS_OPTIONS, roomRawName } from "../types/chat";
+import { MY_STATUS_OPTIONS, myStatusText, roomRawName } from "../types/chat";
 import NicknameView from "../components/NicknameView.vue";
 import UserListView from "../components/UserListView.vue";
 import RoomListView from "../components/RoomListView.vue";
@@ -38,6 +38,7 @@ const {
   setMyStatus,
   userlist,
   onlineUsers,
+  userStatuses,
   usersDetail,
   joinError,
   userUpsertResult,
@@ -672,8 +673,8 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       </div>
       <div class="header-buttons">
         <!-- 내 상태: 닉네임 오른쪽(=나가기 버튼 왼쪽) 드롭다운.
-             서버로 보내지 않고 이 브라우저에만 저장되므로 다른 사람에게는 보이지 않는다. -->
-        <label class="status-select-wrap" title="내 상태 (이 브라우저에만 저장됩니다)">
+             status_set으로 서버에 전파되어 다른 사용자에게도 표시된다. -->
+        <label class="status-select-wrap" title="내 상태 (다른 사용자에게도 표시됩니다)">
           <span class="status-select-label">내 상태</span>
           <select
             class="status-select"
@@ -682,7 +683,7 @@ const visibleRooms = computed<RoomInfo[]>(() =>
             @change="setMyStatus(($event.target as HTMLSelectElement).value as MyStatus)"
           >
             <option v-for="opt in MY_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
-              {{ opt.label }}
+              {{ myStatusText(opt.value) }}
             </option>
           </select>
         </label>
@@ -725,6 +726,7 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       :my-nickname="nickname"
       :users="userlist"
       :online-users="onlineUsers"
+      :user-statuses="userStatuses"
       :connection-status="connectionStatus"
       :is-connected="isConnected"
       :is-admin="isAdmin()"
