@@ -5,6 +5,7 @@ import type { ChatUser, Department, MyStatus } from "../types/chat";
 import type { UserDetail } from "../composables/useChatSocket";
 import UserSearchInput from "./UserSearchInput.vue";
 import ProfileAvatar from "./ProfileAvatar.vue";
+import UserDetailModal, { type UserDetailInfo } from "./UserDetailModal.vue";
 
 const props = defineProps<{
   myUserNo: number | null;
@@ -177,7 +178,7 @@ const confirmUserModal = () => {
 // ─── 사용자 상세정보 모달 (더보기 메뉴 → '상세정보') ───
 // 추가/수정 모달의 입력 항목 중 아이디를 제외하고 읽기 전용으로 보여준다.
 // 상세 필드는 admin만 받는 usersDetail에 있으므로, 없으면 닉네임 외 항목은 '-'로 표시한다.
-const detailUser = ref<{ nickname: string; phone: string | null; userName: string | null; deptNo: number | null; isDeleted: boolean } | null>(null);
+const detailUser = ref<UserDetailInfo | null>(null);
 const openDetailModal = (user: ChatUser) => {
   const d = props.usersDetail.find((x) => x.user_no === user.user_no);
   detailUser.value = {
@@ -280,26 +281,12 @@ const closeDetailModal = () => {
     </div>
 
     <!-- 사용자 상세정보 모달 (읽기 전용, 아이디 제외) -->
-    <div v-if="detailUser" class="modal-backdrop" @click="closeDetailModal">
-      <div class="modal-card" @click.stop>
-        <h3>상세정보</h3>
-        <dl class="detail-list">
-          <dt>닉네임</dt>
-          <dd>{{ detailUser.nickname }}</dd>
-          <dt>전화번호</dt>
-          <dd>{{ detailUser.phone || '-' }}</dd>
-          <dt>이름</dt>
-          <dd>{{ detailUser.userName || '-' }}</dd>
-          <dt>부서</dt>
-          <dd>{{ deptNameOf(detailUser.deptNo) || '-' }}</dd>
-          <dt>탈퇴여부</dt>
-          <dd>{{ detailUser.isDeleted ? '탈퇴' : '정상' }}</dd>
-        </dl>
-        <div class="modal-actions">
-          <button class="small-btn primary" @click="closeDetailModal">닫기</button>
-        </div>
-      </div>
-    </div>
+    <UserDetailModal
+      v-if="detailUser"
+      :user="detailUser"
+      :dept-name="deptNameOf(detailUser.deptNo)"
+      @close="closeDetailModal"
+    />
 
     <!-- 사용자 추가/수정 모달 (admin 전용) -->
     <div v-if="showUserModal" class="modal-backdrop" @click="closeUserModal">
@@ -537,14 +524,5 @@ const closeDetailModal = () => {
 }
 .text-input:disabled { background: #f1f3f5; color: #555; }
 .check-row { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-top: 12px; }
-.detail-list {
-  display: grid;
-  grid-template-columns: 72px 1fr;
-  gap: 8px 12px;
-  margin: 0;
-  font-size: 14px;
-}
-.detail-list dt { color: #555; font-size: 13px; }
-.detail-list dd { margin: 0; color: #222; word-break: break-all; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 </style>

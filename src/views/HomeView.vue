@@ -15,6 +15,7 @@ import RenameRoomModal from "../components/RenameRoomModal.vue";
 import CloseConfirmModal from "../components/CloseConfirmModal.vue";
 import ProfileAvatar from "../components/ProfileAvatar.vue";
 import ProfileImageModal from "../components/ProfileImageModal.vue";
+import UserDetailModal, { type UserDetailInfo } from "../components/UserDetailModal.vue";
 import { openImageWindow } from "../utils/imageWindow";
 import { useChatSocket } from "../composables/useChatSocket";
 import {
@@ -742,6 +743,29 @@ const handleMenuLeave = () => {
   handleLeave();
 };
 
+// ─── 내정보 모달 (헤더 ⋮ 메뉴 → '내정보') ───
+// 사용자 목록의 '상세정보'와 같은 모달을 쓴다.
+// 상세 필드는 admin만 받는 usersDetail에 있으므로, 없으면 닉네임 외 항목은 '-'로 표시한다.
+const myInfo = ref<UserDetailInfo | null>(null);
+const openMyInfoModal = () => {
+  closeHeaderMenu();
+  const d = usersDetail.value.find((x) => x.user_no === myUserNo.value);
+  myInfo.value = {
+    nickname: d?.nickname ?? nickname.value,
+    phone: d?.phone ?? null,
+    userName: d?.userName ?? null,
+    deptNo: d?.deptNo ?? null,
+    isDeleted: d?.isDeleted ?? false,
+  };
+};
+const closeMyInfoModal = () => {
+  myInfo.value = null;
+};
+const myInfoDeptName = computed(() => {
+  const deptNo = myInfo.value?.deptNo;
+  return deptNo == null ? "" : (depts.value.find((d) => d.deptNo === deptNo)?.deptName ?? "");
+});
+
 // ─── 내 닉네임 변경 (본인) ───
 const showMyRenameModal = ref(false);
 const myRenameInput = ref("");
@@ -872,11 +896,12 @@ const visibleRooms = computed<RoomInfo[]>(() =>
         >
           재연결
         </button>
-        <!-- 더보기(⋮) 메뉴: 내 닉네임 변경 / 나가기 -->
+        <!-- 더보기(⋮) 메뉴: 내정보 / 내 닉네임 변경 / 프로필이미지 설정 / 나가기 -->
         <div class="header-menu-wrap">
           <button class="more-btn" title="더보기" @click.stop="toggleHeaderMenu">⋮</button>
           <div v-if="showHeaderMenu" class="header-menu-backdrop" @click="closeHeaderMenu"></div>
           <div v-if="showHeaderMenu" class="header-menu" @click.stop>
+            <button @click="openMyInfoModal">내정보</button>
             <button :disabled="!isConnected" @click="openMyRenameModal">내 닉네임 변경</button>
             <button :disabled="!isConnected" @click="openProfileImageModal">프로필이미지 설정</button>
             <button v-if="isConnected" @click="handleMenuLeave">나가기</button>
@@ -955,6 +980,14 @@ const visibleRooms = computed<RoomInfo[]>(() =>
         </div>
       </div>
     </div>
+    <!-- 내정보 모달 (헤더 ⋮ 메뉴 → '내정보') — 사용자 목록의 '상세정보'와 같은 모달 -->
+    <UserDetailModal
+      v-if="myInfo"
+      :user="myInfo"
+      :dept-name="myInfoDeptName"
+      title="내정보"
+      @close="closeMyInfoModal"
+    />
     <!-- 프로필이미지 설정 모달 (헤더 ⋮ 메뉴 → '프로필이미지 설정') -->
     <ProfileImageModal
       v-if="showProfileImageModal"
