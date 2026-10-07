@@ -10,10 +10,16 @@ import NicknameView from "../NicknameView.vue";
 import ChatWindow from "../ChatWindow.vue";
 import ImageViewer from "../ImageViewer.vue";
 import PasswordChangeModal from "../PasswordChangeModal.vue";
+import RoomListView from "../RoomListView.vue";
 import { normalizePhone } from "../../utils/phone";
 import { attachmentFromRoute } from "../../utils/imageWindow";
 import { AUTO_LOGIN_STORAGE_KEY, SAVED_LOGIN_STORAGE_KEY } from "../../constants";
-import { ROOM_TITLE_INPUT_MAX_LENGTH, type ChatMessage, type ChatUser } from "../../types/chat";
+import {
+  ROOM_TITLE_INPUT_MAX_LENGTH,
+  type ChatMessage,
+  type ChatUser,
+  type RoomInfo,
+} from "../../types/chat";
 
 /** 배열의 마지막 원소 (tsconfig lib이 ES2020이라 Array.prototype.at을 쓰지 않는다) */
 const last = <T>(list: T[] | undefined): T | undefined => list?.[list.length - 1];
@@ -616,5 +622,39 @@ describe("PasswordChangeModal", () => {
     await wrapper.get(".small-btn.primary").trigger("click");
     expect(wrapper.text()).toContain("일치하지 않습니다");
     expect(wrapper.emitted("apply")).toBeUndefined();
+  });
+});
+
+describe("RoomListView 더보기 메뉴", () => {
+  const room: RoomInfo = { roomId: 1, name: "방", owner_no: 1, owner: "a", memberCount: 2 };
+  const mountList = () =>
+    mount(RoomListView, {
+      props: { rooms: [room], unread: {}, isConnected: true },
+      attachTo: document.body,
+    });
+
+  it("메뉴 바깥(컴포넌트 밖 빈 공간 포함)을 누르면 닫히고, 메뉴 안을 누르면 유지된다", async () => {
+    const wrapper = mountList();
+    await wrapper.get(".room-more").trigger("click");
+    expect(wrapper.find(".room-ctx").exists()).toBe(true);
+
+    wrapper.get(".room-ctx button").element.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".room-ctx").exists()).toBe(true);
+
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".room-ctx").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("헤더 ⋮ 메뉴도 바깥을 누르면 닫힌다", async () => {
+    const wrapper = mountList();
+    await wrapper.get(".more-btn").trigger("click");
+    expect(wrapper.find(".ctx-menu").exists()).toBe(true);
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".ctx-menu").exists()).toBe(false);
+    wrapper.unmount();
   });
 });

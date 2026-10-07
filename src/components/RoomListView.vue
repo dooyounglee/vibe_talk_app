@@ -132,33 +132,38 @@ const onDocKeydown = (e: KeyboardEvent) => {
   if (e.key === "Escape") closeAllMenus();
 };
 
-// 컴포넌트 밖(또는 열린 메뉴 밖)을 우클릭하면 열려 있던 메뉴를 닫는다
+// 열린 메뉴 바깥을 클릭/우클릭하면 메뉴를 닫는다 (컴포넌트 밖 빈 공간 포함).
+// 메뉴 자체와 ⋮ 토글 버튼은 각자 처리하므로 제외한다.
 const rootRef = ref<HTMLElement | null>(null);
-const onDocContextmenu = (e: MouseEvent) => {
+const isInsideMenuOrToggle = (target: Node) => {
+  if (!rootRef.value) return false;
+  const els = rootRef.value.querySelectorAll(".ctx-menu, .more-btn, .room-more");
+  return Array.from(els).some((el) => el.contains(target));
+};
+
+const onDocOutside = (e: Event) => {
   if (ctxRoomId.value === null && !showMenu.value) return;
   const target = e.target as Node | null;
-  if (!target || !rootRef.value) return;
-  const menus = rootRef.value.querySelectorAll(".ctx-menu");
-  for (const menu of Array.from(menus)) {
-    if (menu.contains(target)) return;
-  }
+  if (!target || isInsideMenuOrToggle(target)) return;
   closeAllMenus();
 };
 
 window.addEventListener("scroll", closeAllMenus, true);
 window.addEventListener("resize", closeAllMenus);
 window.addEventListener("keydown", onDocKeydown);
-window.addEventListener("contextmenu", onDocContextmenu, true);
+window.addEventListener("pointerdown", onDocOutside, true);
+window.addEventListener("contextmenu", onDocOutside, true);
 onBeforeUnmount(() => {
   window.removeEventListener("scroll", closeAllMenus, true);
   window.removeEventListener("resize", closeAllMenus);
   window.removeEventListener("keydown", onDocKeydown);
-  window.removeEventListener("contextmenu", onDocContextmenu, true);
+  window.removeEventListener("pointerdown", onDocOutside, true);
+  window.removeEventListener("contextmenu", onDocOutside, true);
 });
 </script>
 
 <template>
-  <div ref="rootRef" class="room-screen" @click="closeAllMenus">
+  <div ref="rootRef" class="room-screen">
     <div class="list-header-row">
       <h2 class="list-title">내 채팅방 ({{ rooms.length }}개)</h2>
       <div class="more-wrap">
