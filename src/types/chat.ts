@@ -15,11 +15,65 @@ export interface ChatMessage {
    * 내 메시지(message-self)와 상대 메시지(message-other) 모두에 붙는다.
    */
   unreadCount?: number;
+  /** 첨부파일 메시지면 파일 정보 (text 에는 파일명이 들어 있다) */
+  file?: ChatAttachment;
+}
+
+/** 첨부파일 (서버 POST /upload 로 올리고 GET /files/:id 로 받는다) */
+export interface ChatAttachment {
+  /** 서버 파일 키 (다운로드 URL 에 쓰인다) */
+  id: string;
+  name: string;
+  /** 바이트 */
+  size: number;
+  mime: string;
+}
+
+/** 이미지 첨부면 채팅창에 바로 보여준다 */
+export function isImageAttachment(file?: ChatAttachment | null): boolean {
+  return !!file && file.mime.startsWith("image/");
+}
+
+/** 파일 크기 표기: 512 B / 1.2 KB / 3.4 MB */
+export function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 목록 미리보기 문구 (서버 previewTextOf 와 같은 규칙): 이미지='사진', 그 외='파일: 이름' */
+export function attachmentPreviewText(file: ChatAttachment): string {
+  return isImageAttachment(file) ? "사진" : `파일: ${file.name}`;
+}
+
+/** 서버가 내려준 file 값 → ChatAttachment (형식이 맞지 않으면 undefined) */
+export function toChatAttachment(raw: unknown): ChatAttachment | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const f = raw as Record<string, unknown>;
+  if (typeof f.id !== "string" || f.id === "") return undefined;
+  return {
+    id: f.id,
+    name: typeof f.name === "string" && f.name ? f.name : "file",
+    size: typeof f.size === "number" ? f.size : 0,
+    mime: typeof f.mime === "string" && f.mime ? f.mime : "application/octet-stream",
+  };
 }
 
 export interface ChatUser {
   user_no: number;
   nickname: string;
+}
+
+/** 채팅창 메시지 검색 상태 (서버 room_search_result) */
+export interface RoomSearchState {
+  keyword: string;
+  /** 매칭 메시지 msgId 목록 (최신 → 과거 순) */
+  ids: number[];
+  /** 서버 응답을 기다리는 중 */
+  loading: boolean;
+  /** 결과가 상한(300건)을 넘어 잘렸는지 */
+  truncated: boolean;
 }
 
 /** 부서 (admin 설정 > 부서관리). isDeleted = 미사용 */

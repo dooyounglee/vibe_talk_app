@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import type { ChatMessage, ChatUser, Department, MyStatus, RoomInfo } from "../types/chat";
+import type { ChatMessage, ChatUser, Department, MyStatus, RoomInfo, RoomSearchState } from "../types/chat";
 import {
   DEFAULT_MY_STATUS,
   MY_STATUS_EMOJI,
@@ -7,6 +7,8 @@ import {
   ROOM_TITLE_INPUT_MAX_LENGTH,
   myStatusText,
   normalizeMyStatus,
+  attachmentPreviewText,
+  toChatAttachment,
 } from "../types/chat";
 import { LOGIN_ID_STORAGE_KEY, MY_STATUS_STORAGE_KEY } from "../constants";
 
@@ -106,6 +108,11 @@ const roomMembers = ref<Record<number, Array<ChatUser>>>({});
 // 이전 대화 더보기 (msgId 커서 페이징): 방별로 더 불러올 이전 대화가 있는지 / 불러오는 중인지
 const roomHasMore = ref<Record<number, boolean>>({});
 const roomLoadingOlder = ref<Record<number, boolean>>({});
+// 검색 결과로 점프해 최신이 아닌 구간을 보는 중이면, 아래로 이어 불러올 대화가 있는지 / 불러오는 중인지
+const roomHasNewer = ref<Record<number, boolean>>({});
+const roomLoadingNewer = ref<Record<number, boolean>>({});
+// 채팅창 메시지 검색 상태 (ids: 매칭 msgId, 최신 → 과거 순)
+const roomSearch = ref<Record<number, RoomSearchState>>({});
 // 1:1 대화에 대응하는 방 번호를 찾는다.
 // (1:1 방의 displayName은 상대 닉네임이므로 매칭할 수 있다)
 // '사용자' 탭에서 상대를 눌러 이미 만들어진 방으로 바로 열기 위한 조회다.
@@ -222,6 +229,8 @@ interface HistoryEntry {
   id?: number;
   /** 이 메시지를 아직 안 읽은 사람 수 (0 이면 표시하지 않음). 발신자만 제외하고 센다 */
   unreadCount?: number;
+  /** 첨부파일 메시지면 { id, name, size, mime } */
+  file?: unknown;
 }
 
 // 서버 히스토리 항목(history_room / history_room_older) → ChatMessage
@@ -239,6 +248,7 @@ const toRoomHistory = (roomId: number, messages: unknown): Array<ChatMessage> =>
     msgId: readMsgId(msg),
     unreadCount:
       typeof msg?.unreadCount === "number" ? msg.unreadCount : 0,
+    file: toChatAttachment(msg?.file),
   }));
 
 interface IncomingPayload {
@@ -285,6 +295,14 @@ interface IncomingPayload {
   hasMore?: boolean;
   // history_room_older: 요청했던 커서 (응답이 현재 목록에 이어 붙일 수 있는지 확인용)
   beforeId?: number;
+  // history_room_around / history_room_newer: 더 이후 대화가 있는지
+  hasNewer?: boolean;
+  // history_room_newer: 요청했던 커서
+  afterId?: number;
+  // room_search_result: 검색어 / 매칭 msgId 목록(최신 → 과거) / 상한 초과 여부
+  keyword?: string;
+  ids?: Array<number>;
+  truncated?: boolean;
 }
 
 // user_no 판정용
@@ -474,6 +492,9 @@ const handleIncoming = (raw: string) => {
     roomMessages.value[roomId] = history;
     roomHasMore.value[roomId] = data.hasMore === true;
     roomLoadingOlder.value[roomId] = false;
+    // 최신 페이지이므로 아래로 이어 불러올 대화는 없다 (검색 점프 상태 해제)
+    roomHasNewer.value[roomId] = false;
+    roomLoadingNewer.value[roomId] = false;
     // 방을 열면 참여자 목록도 함께 온다 → 읽음 숫자 실시간 재계산에 쓴다.
     // (이게 없으면 read_ack 를 받았을 때 숫자가 0으로 잘못 계산되어 한 번에 사라진다)
     if (Array.isArray(data.memberProfiles)) {
@@ -500,6 +521,43 @@ const handleIncoming = (raw: string) => {
       (m) => m.msgId === undefined || !known.has(m.msgId),
     );
     if (older.length > 0) roomMessages.value[roomId] = [...older, ...box];
+  } else if (data.type === "history_room_around") {
+    // 검색 결과 점프: 대상 메시지를 가운데 둔 한 페이지로 박스를 덮어쓴다.
+    const roomId = Number(data.roomId);
+    if (!Number.isInteger(roomId)) return;
+    roomMessages.value[roomId] = toRoomHistory(roomId, data.messages);
+    roomHasMore.value[roomId] = data.hasMore === true;
+    roomLoadingOlder.value[roomId] = false;
+    roomHasNewer.value[roomId] = data.hasNewer === true;
+    roomLoadingNewer.value[roomId] = false;
+  } else if (data.type === "history_room_newer") {
+    const roomId = Number(data.roomId);
+    if (!Number.isInteger(roomId)) return;
+    roomLoadingNewer.value[roomId] = false;
+    const box = ensureRoomBox(roomId);
+    // 응답 대기 중 박스가 덮어써졌다면 (최신 페이지/다른 점프) 이어 붙이면 순서가 꼬인다 → 버린다.
+    const tail = [...box].reverse().find((m) => typeof m.msgId === "number");
+    if (tail && Number(data.afterId) !== tail.msgId) return;
+    roomHasNewer.value[roomId] = data.hasNewer === true;
+    const known = new Set(box.map((m) => m.msgId).filter((id) => typeof id === "number"));
+    const newer = toRoomHistory(roomId, data.messages).filter(
+      (m) => m.msgId === undefined || !known.has(m.msgId),
+    );
+    if (newer.length > 0) roomMessages.value[roomId] = [...box, ...newer];
+  } else if (data.type === "room_search_result") {
+    const roomId = Number(data.roomId);
+    if (!Number.isInteger(roomId)) return;
+    const current = roomSearch.value[roomId];
+    // 응답 대기 중 검색어가 바뀌었거나 검색을 닫았으면 버린다
+    if (!current || current.keyword !== String(data.keyword ?? "")) return;
+    roomSearch.value[roomId] = {
+      keyword: current.keyword,
+      ids: (Array.isArray(data.ids) ? data.ids : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0),
+      loading: false,
+      truncated: data.truncated === true,
+    };
   } else if (data.type === "room_message") {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
@@ -518,13 +576,16 @@ const handleIncoming = (raw: string) => {
       msgId: typeof data.msgId === "number" ? data.msgId : undefined,
       unreadCount:
         typeof data.unreadCount === "number" ? data.unreadCount : 0,
+      file: toChatAttachment((data as { file?: unknown }).file),
     };
-    ensureRoomBox(roomId).push(msg);
+    // 검색 점프로 과거 구간을 보는 중이면 사이가 비어 있으므로 붙이지 않는다
+    // (아래로 스크롤하거나 '맨 아래로'를 누르면 서버에서 다시 받아온다)
+    if (roomHasNewer.value[roomId] !== true) ensureRoomBox(roomId).push(msg);
     // 안읽은 건수는 서버 신호(unread_bump)가 진실이므로 여기서 증가시키지 않는다.
     // '내 채팅방' 목록 미리보기/시간 즉시 갱신 (다음 my_rooms 수신 때 DB 값으로 재확정)
     const room = myRooms.value.find((r) => r.roomId === roomId);
     if (room) {
-      room.lastMessage = msg.text;
+      room.lastMessage = msg.file ? attachmentPreviewText(msg.file) : msg.text;
       room.lastMessageAt = msg.timestamp ?? null;
       room.lastMessageSender = from;
     }
@@ -713,6 +774,11 @@ const attachHandlers = (socket: WebSocket) => {
     isConnected.value = false;
     // 응답을 못 받은 "이전 대화 불러오는 중" 표시가 남지 않게 푼다
     roomLoadingOlder.value = {};
+    roomLoadingNewer.value = {};
+    // 검색 응답도 더는 오지 않으므로 '검색 중' 표시를 푼다 (결과가 이미 온 검색은 유지)
+    for (const [rid, s] of Object.entries(roomSearch.value)) {
+      if (s.loading) delete roomSearch.value[Number(rid)];
+    }
     if (isManuallyDisconnected.value) {
       connectionStatus.value = "연결 끊김";
       return;
@@ -842,6 +908,14 @@ const sendRoom = (roomId: number, text: string): boolean => {
   return true;
 };
 
+// 첨부파일 메시지: 먼저 HTTP 로 업로드해 받은 fileId 를 방에 붙여 달라고 요청한다
+const sendRoomFile = (roomId: number, fileId: string): boolean => {
+  if (!Number.isInteger(roomId) || !fileId) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_message", roomId, fileId }));
+  return true;
+};
+
 // ─── 채팅창 열람: DB 최신 한 페이지 조회 요청 ───
 // 채팅창이 열릴 때마다 호출하며, 서버는 history_room으로 최신 한 페이지(30건)를 내려준다
 // (수신 시 해당 박스를 덮어쓴다). 1:1도 방이므로 같은 경로를 쓴다.
@@ -864,6 +938,49 @@ const requestOlderMessages = (roomId: number): boolean => {
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   ws.send(JSON.stringify({ type: "room_history_older", roomId, beforeId: oldest.msgId }));
   roomLoadingOlder.value[roomId] = true;
+  return true;
+};
+
+// ─── 채팅창 메시지 검색 ───
+// 서버가 방 전체(초대 이후)에서 본문 포함 검색을 해 room_search_result 로 매칭 msgId 목록을 내려준다.
+// 빈 검색어는 검색 해제.
+const SEARCH_KEYWORD_MAX = 50;
+const clearRoomSearch = (roomId: number) => {
+  if (roomSearch.value[roomId]) delete roomSearch.value[roomId];
+};
+const requestRoomSearch = (roomId: number, keyword: string): boolean => {
+  if (!Number.isInteger(roomId) || roomId <= 0) return false;
+  const kw = keyword.trim().slice(0, SEARCH_KEYWORD_MAX);
+  if (kw === "") {
+    clearRoomSearch(roomId);
+    return true;
+  }
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_search", roomId, keyword: kw }));
+  roomSearch.value[roomId] = { keyword: kw, ids: [], loading: true, truncated: false };
+  return true;
+};
+
+// 검색 결과 점프: msgId 를 가운데 둔 한 페이지를 요청한다 (history_room_around 로 박스를 덮어쓴다)
+const requestMessagesAround = (roomId: number, msgId: number): boolean => {
+  if (!Number.isInteger(roomId) || roomId <= 0) return false;
+  if (!Number.isInteger(msgId) || msgId <= 0) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_history_around", roomId, msgId }));
+  return true;
+};
+
+// 점프 후 아래로 스크롤: 지금 들고 있는 가장 최근 msgId 이후 한 페이지 (뒤에 이어 붙인다)
+const requestNewerMessages = (roomId: number): boolean => {
+  if (!Number.isInteger(roomId) || roomId <= 0) return false;
+  if (roomLoadingNewer.value[roomId] || roomHasNewer.value[roomId] !== true) return false;
+  const newest = [...(roomMessages.value[roomId] ?? [])]
+    .reverse()
+    .find((m) => typeof m.msgId === "number");
+  if (!newest?.msgId) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_history_newer", roomId, afterId: newest.msgId }));
+  roomLoadingNewer.value[roomId] = true;
   return true;
 };
 
@@ -929,6 +1046,9 @@ const connect = (loginIdInput: string): boolean => {
     roomMembers.value = {};
     roomHasMore.value = {};
     roomLoadingOlder.value = {};
+    roomHasNewer.value = {};
+    roomLoadingNewer.value = {};
+    roomSearch.value = {};
   }
   // 안읽은 건수는 서버 DB가 진실이므로 여기서 복원하지 않는다.
   roomUnread.value = {};
@@ -1059,6 +1179,9 @@ const disconnect = () => {
   roomMessages.value = {};
   roomUnread.value = {};
   roomMembers.value = {};
+  roomHasNewer.value = {};
+  roomLoadingNewer.value = {};
+  roomSearch.value = {};
   // 창들이 모두 닫히므로 "보고 있는 방" 상태도 비운다.
   focusedRooms.value = {};
 };
@@ -1097,6 +1220,9 @@ export function useChatSocket() {
     roomMembers,
     roomHasMore,
     roomLoadingOlder,
+    roomHasNewer,
+    roomLoadingNewer,
+    roomSearch,
     findOneToOneRoomId,
     oneToOnePeerOfRoom,
     // 채팅창 focus 상태 (안읽은 건수를 잡지 않을 대상 판정용)
@@ -1117,9 +1243,14 @@ export function useChatSocket() {
     renameRoom,
     sendRoomInvite,
     sendRoom,
+    sendRoomFile,
     requestOneToOneRoom,
     requestRoomHistory,
     requestOlderMessages,
+    requestNewerMessages,
+    requestMessagesAround,
+    requestRoomSearch,
+    clearRoomSearch,
     upsertUser,
     renameUser,
   };

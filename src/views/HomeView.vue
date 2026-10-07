@@ -55,6 +55,9 @@ const {
   roomMembers,
   roomHasMore,
   roomLoadingOlder,
+  roomHasNewer,
+  roomLoadingNewer,
+  roomSearch,
   findOneToOneRoomId,
   connect,
   manualReconnect,
@@ -62,6 +65,10 @@ const {
   requestOneToOneRoom,
   requestRoomHistory,
   requestOlderMessages,
+  requestNewerMessages,
+  requestMessagesAround,
+  requestRoomSearch,
+  clearRoomSearch,
   clearRoomUnread,
   setRoomFocus,
   forgetRoomFocus,
@@ -71,6 +78,7 @@ const {
   refreshRooms,
   renameRoom,
   sendRoomInvite,
+  sendRoomFile,
   sendRoom,
   upsertUser,
   renameUser,
@@ -198,6 +206,9 @@ const openTauriRoomWindowWith = async (
     visible: true,
     focus: true,
     center: true,
+    // Tauri 기본 파일 끌어놓기 처리를 끈다 — 켜져 있으면 웹뷰의 HTML drop 이벤트가 오지 않아
+    // 채팅창에 파일을 끌어놓아 첨부할 수 없다.
+    dragDropEnabled: false,
   });
   tauriRoomWindows.set(roomId, child);
   await child.once("tauri://created", () => {
@@ -248,6 +259,11 @@ const broadcastRoom = (roomId: number) => {
     isConnected: isConnected.value,
     hasMore: roomHasMore.value[roomId] === true,
     loadingOlder: roomLoadingOlder.value[roomId] === true,
+    hasNewer: roomHasNewer.value[roomId] === true,
+    loadingNewer: roomLoadingNewer.value[roomId] === true,
+    search: roomSearch.value[roomId]
+      ? { ...roomSearch.value[roomId], ids: [...roomSearch.value[roomId].ids] }
+      : null,
     mainId,
   });
 };
@@ -330,7 +346,8 @@ const closeAllRoomWindows = () => {
         const wins = await WebviewWindow.getAll();
         await Promise.all(
           wins
-            .filter((w) => w.label.startsWith("room_"))
+            // 채팅창에서 띄운 이미지 창(image_)도 함께 닫는다
+            .filter((w) => w.label.startsWith("room_") || w.label.startsWith("image_"))
             .map((w) => w.close().catch(() => undefined)),
         );
       } catch {
@@ -446,6 +463,8 @@ onMounted(() => {
       case "room-close":
         openRooms.delete(msg.roomId);
         forgetRoomFocus(msg.roomId);
+        // 창을 닫으면 검색도 끝난다 (다시 열면 검색바가 닫힌 상태)
+        clearRoomSearch(msg.roomId);
         break;
       case "room-focus":
         setRoomFocus(msg.roomId, msg.focused);
@@ -467,7 +486,22 @@ onMounted(() => {
         // 응답(history_room_older)이 오면 roomMessages watch가 열린 창에 스냅샷을 다시 보낸다.
         requestOlderMessages(msg.roomId);
         break;
-      case "room-send": {
+      // 채팅방 창(팝업)의 메시지 검색 / 결과 점프 / 점프 후 아래로 스크롤 / 최신으로 복귀.
+      // 응답이 오면 아래 watch가 열린 창에 스냅샷을 다시 보낸다.
+      case "room-search":
+        requestRoomSearch(msg.roomId, msg.keyword);
+        break;
+      case "room-jump":
+        requestMessagesAround(msg.roomId, msg.msgId);
+        break;
+      case "room-load-newer":
+        requestNewerMessages(msg.roomId);
+        break;
+      case "room-load-latest":
+        requestRoomHistory(msg.roomId);
+        break;
+      case "room-send":
+      case "room-send-file": {
         const key = dedupeKeyFor(msg);
         if (key) {
           if (seenBusMessages.has(key)) break;
@@ -477,7 +511,8 @@ onMounted(() => {
             if (oldest) seenBusMessages.delete(oldest);
           }
         }
-        sendRoom(msg.roomId, msg.text);
+        if (msg.kind === "room-send") sendRoom(msg.roomId, msg.text);
+        else sendRoomFile(msg.roomId, msg.fileId);
         broadcastRoom(msg.roomId);
         break;
       }
@@ -568,7 +603,7 @@ onUnmounted(() => {
 
 // 방/연결 상태가 바뀌면 열려 있는 채팅방 창들에 스냅샷 브로드캐스트
 watch(
-  [roomMessages, roomMembers, roomHasMore, roomLoadingOlder, connectionStatus, isConnected, nickname, myRooms],
+  [roomMessages, roomMembers, roomHasMore, roomLoadingOlder, roomHasNewer, roomLoadingNewer, roomSearch, connectionStatus, isConnected, nickname, myRooms],
   () => {
     broadcastAllRooms();
     syncTauriRoomTitles();

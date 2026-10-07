@@ -10,11 +10,12 @@ import {
   type ChatBus,
   type ChatBusHandler,
 } from "../chatBus";
-import type { ChatMessage, ChatUser } from "../types/chat";
+import type { ChatMessage, ChatUser, RoomSearchState } from "../types/chat";
 import { roomDisplayName, truncateRoomTitle, ROOM_TITLE_INPUT_MAX_LENGTH } from "../types/chat";
 import { LOGIN_ID_STORAGE_KEY } from "../constants";
 import { useChatSocket } from "./useChatSocket";
 import { useWindowFocus } from "./useWindowFocus";
+import { MAX_ATTACHMENTS_PER_SEND, uploadAttachment } from "../utils/attachment";
 
 const LINK_TIMEOUT_MS = 3500;
 
@@ -36,6 +37,9 @@ export function useChatRoom(roomId: { readonly value: number }) {
   const busIsConnected = ref(false);
   const busHasMore = ref(false);
   const busLoadingOlder = ref(false);
+  const busHasNewer = ref(false);
+  const busLoadingNewer = ref(false);
+  const busSearch = ref<RoomSearchState | null>(null);
   const linked = ref(false);
   let bus: (ChatBus & { add: (b: ChatBus | null) => void }) | null = null;
   let busClosed = false;
@@ -51,7 +55,11 @@ export function useChatRoom(roomId: { readonly value: number }) {
     userNo: number | null, nick: string, rname: string, msgs: ChatMessage[],
     mems: ChatUser[], status: string, connected: boolean, users: ChatUser[] = [],
     hasMore = false, loadingOlder = false,
+    hasNewer = false, loadingNewer = false, search: RoomSearchState | null = null,
   ) => {
+    busHasNewer.value = hasNewer;
+    busLoadingNewer.value = loadingNewer;
+    busSearch.value = search ? { ...search, ids: [...search.ids] } : null;
     busUserNo.value = userNo;
     busNickname.value = nick;
     busRoomName.value = rname;
@@ -120,6 +128,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
         msg.members, msg.connectionStatus, msg.isConnected,
         Array.isArray(msg.users) ? msg.users : [],
         msg.hasMore === true, msg.loadingOlder === true,
+        msg.hasNewer === true, msg.loadingNewer === true, msg.search ?? null,
       );
     } else if (msg.kind === "main-ready") {
       announceOpen();
@@ -147,6 +156,43 @@ export function useChatRoom(roomId: { readonly value: number }) {
     }
     return true;
   };
+
+  // ─── 첨부파일 전송 ───
+  // 업로드는 어느 창에서든 HTTP 로 직접 하고, 받은 fileId 만 소켓(같은 탭) 또는 메인 창(버스)으로 넘긴다.
+  // 여러 개면 고른 순서대로 하나씩 올리고 보낸다. 실패한 파일의 문구를 모아 돌려준다.
+  const uploadingCount = ref(0);
+  const sendFileId = (fileId: string): boolean => {
+    const target = effectiveRoomId.value;
+    if (!target) return false;
+    if (direct.value) return store.sendRoomFile(target, fileId);
+    if (!linked.value || !busIsConnected.value) return false;
+    try {
+      bus?.post({ kind: "room-send-file", roomId: target, fileId, id: genSendId(), mainId: myMainId ?? undefined });
+    } catch {
+      return false;
+    }
+    return true;
+  };
+  const sendFiles = async (files: File[]): Promise<string[]> => {
+    const list = files.slice(0, MAX_ATTACHMENTS_PER_SEND);
+    const errors: string[] = [];
+    if (files.length > list.length) {
+      errors.push(`한 번에 ${MAX_ATTACHMENTS_PER_SEND}개까지 보낼 수 있습니다.`);
+    }
+    uploadingCount.value += list.length;
+    for (const file of list) {
+      try {
+        const uploaded = await uploadAttachment(file);
+        if (!sendFileId(uploaded.id)) errors.push(`연결이 끊겨 보내지 못했습니다: ${uploaded.name}`);
+      } catch (e) {
+        errors.push(e instanceof Error ? e.message : `파일을 보내지 못했습니다: ${file.name}`);
+      } finally {
+        uploadingCount.value -= 1;
+      }
+    }
+    return errors;
+  };
+  const uploading = computed(() => uploadingCount.value > 0);
 
   const myInfo = computed(() =>
     store.myRooms.value.find((r) => r.roomId === effectiveRoomId.value),
@@ -195,6 +241,21 @@ export function useChatRoom(roomId: { readonly value: number }) {
       ? store.roomLoadingOlder.value[effectiveRoomId.value] === true
       : busLoadingOlder.value,
   );
+  const hasNewer: ComputedRef<boolean> = computed(() =>
+    direct.value
+      ? store.roomHasNewer.value[effectiveRoomId.value] === true
+      : busHasNewer.value,
+  );
+  const loadingNewer: ComputedRef<boolean> = computed(() =>
+    direct.value
+      ? store.roomLoadingNewer.value[effectiveRoomId.value] === true
+      : busLoadingNewer.value,
+  );
+  const searchState: ComputedRef<RoomSearchState | null> = computed(() =>
+    direct.value
+      ? (store.roomSearch.value[effectiveRoomId.value] ?? null)
+      : busSearch.value,
+  );
   const hasSession: ComputedRef<boolean> = computed(() =>
     direct.value
       ? store.loginId.value.trim() !== ""
@@ -207,8 +268,9 @@ export function useChatRoom(roomId: { readonly value: number }) {
 
   // 같은 탭에서 라우트만 바뀌면 컴포넌트가 재사용되므로(언마운트 없음)
   // 방이 바뀔 때마다 다시 DB 최신 한 페이지를 조회한다.
-  watch(effectiveRoomId, (rid) => {
+  watch(effectiveRoomId, (rid, prev) => {
     if (!direct.value || !rid) return;
+    if (prev) store.clearRoomSearch(prev);
     store.clearRoomUnread(rid);
     store.requestRoomHistory(rid);
   });
@@ -261,6 +323,8 @@ export function useChatRoom(roomId: { readonly value: number }) {
   });
 
   onUnmounted(() => {
+    // 같은 탭(direct)은 room-close 를 보내지 않으므로 검색 상태를 여기서 정리한다
+    if (direct.value) store.clearRoomSearch(effectiveRoomId.value);
     announceClose();
     busClosed = true;
     stopAnnounceTimer();
@@ -337,11 +401,67 @@ export function useChatRoom(roomId: { readonly value: number }) {
     return true;
   };
 
+  // 새 창이면 소켓이 있는 메인 창에 버스로 요청만 넘긴다 (응답은 room-state 스냅샷으로 온다)
+  const postToMain = (msg: Parameters<ChatBus["post"]>[0]): boolean => {
+    if (!linked.value) return false;
+    try {
+      bus?.post(msg);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // 메시지 검색 (빈 검색어 = 검색 해제). 새 창은 응답 전까지 loading 으로 먼저 표시한다.
+  const search = (keyword: string): boolean => {
+    const target = effectiveRoomId.value;
+    if (!target) return false;
+    const kw = keyword.trim();
+    if (direct.value) return store.requestRoomSearch(target, kw);
+    const ok = postToMain({ kind: "room-search", roomId: target, keyword: kw, mainId: myMainId ?? undefined });
+    if (ok) busSearch.value = kw === "" ? null : { keyword: kw, ids: [], loading: true, truncated: false };
+    return ok;
+  };
+
+  // 검색 결과 점프: 화면에 없는 메시지면 그 메시지를 가운데 둔 한 페이지로 목록을 바꾼다
+  const jumpTo = (msgId: number): boolean => {
+    const target = effectiveRoomId.value;
+    if (!target) return false;
+    if (direct.value) return store.requestMessagesAround(target, msgId);
+    return postToMain({ kind: "room-jump", roomId: target, msgId, mainId: myMainId ?? undefined });
+  };
+
+  // 점프 후 아래로 스크롤 끝에 닿았을 때 이후 대화
+  const loadNewer = (): boolean => {
+    const target = effectiveRoomId.value;
+    if (!target) return false;
+    if (direct.value) return store.requestNewerMessages(target);
+    if (!busHasNewer.value || busLoadingNewer.value) return false;
+    const ok = postToMain({ kind: "room-load-newer", roomId: target, mainId: myMainId ?? undefined });
+    if (ok) busLoadingNewer.value = true;
+    return ok;
+  };
+
+  // 점프 상태에서 최신 대화로 복귀 ('맨 아래로' / 메시지 전송)
+  const loadLatest = (): boolean => {
+    const target = effectiveRoomId.value;
+    if (!target) return false;
+    if (direct.value) return store.requestRoomHistory(target);
+    return postToMain({ kind: "room-load-latest", roomId: target, mainId: myMainId ?? undefined });
+  };
+
   return {
     messages,
     hasMore,
     loadingOlder,
     loadOlder,
+    hasNewer,
+    loadingNewer,
+    loadNewer,
+    loadLatest,
+    searchState,
+    search,
+    jumpTo,
     myUserNo,
     myNickname,
     roomName: rname,
@@ -353,6 +473,8 @@ export function useChatRoom(roomId: { readonly value: number }) {
     linked,
     effectiveRoomId,
     send,
+    sendFiles,
+    uploading,
     renameRoom,
     invite,
     announceOpen,

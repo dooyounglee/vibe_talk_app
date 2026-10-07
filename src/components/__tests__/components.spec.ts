@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import MessageInput from "../MessageInput.vue";
 import MessageList from "../MessageList.vue";
 import ConnectionBar from "../ConnectionBar.vue";
@@ -8,6 +8,8 @@ import CloseConfirmModal from "../CloseConfirmModal.vue";
 import UserSearchInput from "../UserSearchInput.vue";
 import NicknameView from "../NicknameView.vue";
 import ChatWindow from "../ChatWindow.vue";
+import ImageViewer from "../ImageViewer.vue";
+import { attachmentFromRoute } from "../../utils/imageWindow";
 import { AUTO_LOGIN_STORAGE_KEY, SAVED_LOGIN_STORAGE_KEY } from "../../constants";
 import { ROOM_TITLE_INPUT_MAX_LENGTH, type ChatMessage, type ChatUser } from "../../types/chat";
 
@@ -138,6 +140,90 @@ describe("ChatWindow 이전 대화 더보기", () => {
     const wrapper = mount(ChatWindow, { props: { ...baseProps, messages: msgs(1, 2), hasMore: true } });
     await flush();
     expect(wrapper.emitted("load-older")).toHaveLength(1);
+  });
+});
+
+describe("ChatWindow 메시지 검색", () => {
+  const msgs = (from: number, to: number): ChatMessage[] =>
+    Array.from({ length: to - from + 1 }, (_, i) => ({
+      type: "room", user_no: 11, nickname: "영희", text: `회의 ${from + i}`, msgId: from + i,
+    }));
+  const baseProps = {
+    peer: "#5 스터디", myUserNo: 10, myNickname: "철수",
+    connectionStatus: "연결됨", isConnected: true,
+  };
+  const flush = async () => {
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+  };
+  const result = (ids: number[]) => ({ keyword: "회의", ids, loading: false, truncated: false });
+
+  it("🔍 로 검색바를 열고 Enter 로 검색, 결과가 오면 가장 최근 매치를 강조한다", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    const wrapper = mount(ChatWindow, { props: { ...baseProps, messages: msgs(1, 5) } });
+    await wrapper.get(".search-btn").trigger("click");
+    const input = wrapper.get(".message-search input");
+    await input.setValue("회의");
+    await input.trigger("keydown", { key: "Enter" });
+    expect(wrapper.emitted("search")).toEqual([["회의"]]);
+
+    await wrapper.setProps({ search: { ...result([]), loading: true } });
+    expect(wrapper.get(".search-counter").text()).toBe("검색 중…");
+    await wrapper.setProps({ search: result([5, 3, 1]) });
+    await flush();
+    expect(wrapper.get(".search-counter").text()).toBe("1/3");
+    expect(wrapper.get(".search-active").attributes("data-msg-id")).toBe("5");
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(wrapper.findAll("mark.search-hit")).toHaveLength(5);
+    expect(wrapper.emitted("jump")).toBeUndefined();
+
+    // ▲ 이전(과거) 결과 / 같은 검색어 Enter 도 이전 결과로
+    const [prevBtn, nextBtn] = wrapper.findAll(".search-nav");
+    await prevBtn.trigger("click");
+    await flush();
+    expect(wrapper.get(".search-active").attributes("data-msg-id")).toBe("3");
+    await input.trigger("keydown", { key: "Enter" });
+    await flush();
+    expect(wrapper.get(".search-counter").text()).toBe("3/3");
+    expect(wrapper.emitted("search")).toHaveLength(1);
+    await nextBtn.trigger("click");
+    await flush();
+    expect(wrapper.get(".search-active").attributes("data-msg-id")).toBe("3");
+
+    // 닫으면 검색 해제
+    await wrapper.get(".search-close").trigger("click");
+    expect(wrapper.emitted("search")).toEqual([["회의"], [""]]);
+    expect(wrapper.find(".message-search").exists()).toBe(false);
+  });
+
+  it("화면에 없는 결과는 jump 를 요청하고, 목록이 바뀌면 그 메시지로 스크롤한다", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    const wrapper = mount(ChatWindow, { props: { ...baseProps, messages: msgs(50, 55) } });
+    await wrapper.get(".search-btn").trigger("click");
+    await wrapper.setProps({ search: { ...result([]), loading: true } });
+    await wrapper.setProps({ search: result([20]) });
+    await flush();
+    expect(wrapper.emitted("jump")).toEqual([[20]]);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    await wrapper.setProps({ messages: msgs(18, 22), hasNewer: true });
+    await flush();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(wrapper.get(".search-active").attributes("data-msg-id")).toBe("20");
+    // 과거 구간을 보는 중 → '맨 아래로' 는 최신 페이지 요청
+    await wrapper.get(".to-bottom-btn").trigger("click");
+    expect(wrapper.emitted("load-latest")).toHaveLength(1);
+  });
+});
+
+describe("splitHighlight", () => {
+  it("대소문자 무시로 나누고 특수문자도 글자 그대로 찾는다", async () => {
+    const { splitHighlight } = await import("../../utils/highlight");
+    expect(splitHighlight("Vue vue VUE!", "vue").filter((s) => s.hit).map((s) => s.text)).toEqual(["Vue", "vue", "VUE"]);
+    expect(splitHighlight("a.b(c)", "(c)")).toEqual([{ text: "a.b", hit: false }, { text: "(c)", hit: true }]);
+    expect(splitHighlight("abc", "")).toEqual([{ text: "abc", hit: false }]);
+    expect(splitHighlight("abc", "x")).toEqual([{ text: "abc", hit: false }]);
   });
 });
 
@@ -332,5 +418,111 @@ describe("NicknameView", () => {
     await wrapper.setProps({ joinError: "미등록 사용자", connectionStatus: "입장 거부됨" });
     expect(wrapper.get(".error").text()).toBe("미등록 사용자");
     expect(wrapper.get(".status").text()).toBe("입장 거부됨");
+  });
+});
+
+describe("ChatWindow 첨부파일", () => {
+  const baseProps = {
+    peer: "#5 스터디", myUserNo: 10, myNickname: "철수",
+    connectionStatus: "연결됨", isConnected: true,
+  };
+  const imageMsg: ChatMessage = {
+    type: "room", user_no: 11, nickname: "영희", text: "cat.png", msgId: 1,
+    file: { id: "a".repeat(32), name: "cat.png", size: 2048, mime: "image/png" },
+  };
+  const docMsg: ChatMessage = {
+    type: "room", user_no: 10, nickname: "철수", text: "보고서.pdf", msgId: 2,
+    file: { id: "b".repeat(32), name: "보고서.pdf", size: 3 * 1024 * 1024, mime: "application/pdf" },
+  };
+  const fileOf = (name: string, type: string) => new File(["x"], name, { type });
+
+  it("이미지는 바로 보이고, 클릭하면 이미지마다 새 창(같은 이미지는 같은 창 이름)으로 열린다", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue({ focus: vi.fn() } as unknown as Window);
+    const other: ChatMessage = {
+      ...imageMsg, msgId: 3, file: { ...imageMsg.file!, id: "c".repeat(32), name: "dog.png" },
+    };
+    const wrapper = mount(ChatWindow, { props: { ...baseProps, messages: [imageMsg, other] } });
+    const imgs = wrapper.findAll("img.att-image");
+    expect(imgs[0].attributes("src")).toBe(`http://localhost:8080/files/${"a".repeat(32)}`);
+    await imgs[0].trigger("click");
+    await imgs[1].trigger("click");
+    await imgs[0].trigger("click");
+    await flushPromises();
+    expect(open).toHaveBeenCalledTimes(3);
+    const [url, name] = open.mock.calls[0];
+    expect(String(url)).toContain(`#/image/${"a".repeat(32)}?name=cat.png&size=2048&mime=image%2Fpng`);
+    expect(name).toBe(`vibe_talk_image_${"a".repeat(32)}`);
+    expect(open.mock.calls[1][1]).toBe(`vibe_talk_image_${"c".repeat(32)}`);
+    expect(open.mock.calls[2][1]).toBe(name);
+    expect(wrapper.find(".attach-error").exists()).toBe(false);
+    open.mockRestore();
+  });
+
+  it("팝업이 막히면 안내 문구를 보여준다", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const wrapper = mount(ChatWindow, { props: { ...baseProps, messages: [imageMsg] } });
+    await wrapper.find("img.att-image").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".attach-error").text()).toContain("이미지 창을 열지 못했습니다");
+    open.mockRestore();
+  });
+
+  it("ImageViewer: 확대/축소/원래 크기, 닫기", async () => {
+    const wrapper = mount(ImageViewer, { props: { file: imageMsg.file! } });
+    const percent = () => wrapper.find(".viewer-actions .percent").text();
+    expect(percent()).toBe("100%");
+    await wrapper.find('.viewer-actions button[aria-label="확대"]').trigger("click");
+    expect(percent()).toBe("125%");
+    await wrapper.find(".viewer-stage").trigger("wheel", { deltaY: 100 });
+    expect(percent()).toBe("100%");
+    await wrapper.find('.viewer-actions button[aria-label="축소"]').trigger("click");
+    expect(percent()).toBe("80%");
+    await wrapper.find(".viewer-actions .percent").trigger("click");
+    expect(percent()).toBe("100%");
+    await wrapper.find('.viewer-actions button[aria-label="닫기"]').trigger("click");
+    expect(wrapper.emitted("close")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("이미지 창 라우트 → 첨부 정보 복원", () => {
+    const f = attachmentFromRoute("a".repeat(32), { name: "cat.png", size: "2048", mime: "image/png" });
+    expect(f).toEqual(imageMsg.file);
+    expect(attachmentFromRoute(undefined, {})).toBeUndefined();
+  });
+
+  it("그 외 파일은 이름/크기와 다운로드 카드로 보인다", () => {
+    const wrapper = mount(ChatWindow, { props: { ...baseProps, messages: [docMsg] } });
+    expect(wrapper.find("img.att-image").exists()).toBe(false);
+    expect(wrapper.find(".att-file-name").text()).toBe("보고서.pdf");
+    expect(wrapper.find(".att-file-size").text()).toContain("3.0 MB");
+  });
+
+  it("끌어놓기로 send-files", async () => {
+    const wrapper = mount(ChatWindow, { props: { ...baseProps, messages: [] } });
+    const file = fileOf("a.txt", "text/plain");
+    const dataTransfer = { types: ["Files"], files: [file], dropEffect: "" };
+    await wrapper.find(".chat-window").trigger("dragenter", { dataTransfer });
+    expect(wrapper.find(".drop-overlay").exists()).toBe(true);
+    await wrapper.find(".chat-window").trigger("drop", { dataTransfer });
+    expect(wrapper.find(".drop-overlay").exists()).toBe(false);
+    expect(wrapper.emitted("send-files")?.[0]).toEqual([[file]]);
+  });
+
+  it("Ctrl+V 로 파일이 있으면 send-files, 글자만 있으면 보내지 않는다", async () => {
+    const wrapper = mount(ChatWindow, { props: { ...baseProps, messages: [] } });
+    const input = wrapper.find('.chat-footer input:not([type="file"])');
+    const file = fileOf("image.png", "image/png");
+    await input.trigger("paste", { clipboardData: { files: [file] } });
+    expect(wrapper.emitted("send-files")?.[0]).toEqual([[file]]);
+    await input.trigger("paste", { clipboardData: { files: [] } });
+    expect(wrapper.emitted("send-files")).toHaveLength(1);
+  });
+
+  it("연결이 끊기면 첨부를 보내지 않는다", async () => {
+    const wrapper = mount(ChatWindow, { props: { ...baseProps, isConnected: false, messages: [] } });
+    expect(wrapper.find(".attach-btn").attributes("disabled")).toBeDefined();
+    const dataTransfer = { types: ["Files"], files: [fileOf("a.txt", "text/plain")] };
+    await wrapper.find(".chat-window").trigger("drop", { dataTransfer });
+    expect(wrapper.emitted("send-files")).toBeUndefined();
   });
 });

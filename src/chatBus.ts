@@ -1,5 +1,5 @@
 import { emit, listen } from "@tauri-apps/api/event";
-import type { ChatMessage, ChatUser } from "./types/chat";
+import type { ChatMessage, ChatUser, RoomSearchState } from "./types/chat";
 
 /**
  * 메인 창 ↔ 채팅방 창 간 이벤트 버스.
@@ -30,6 +30,12 @@ export interface RoomStatePayload {
   hasMore?: boolean;
   /** 이전 대화를 불러오는 중인지. 없으면 false 로 본다 */
   loadingOlder?: boolean;
+  /** 검색 점프로 과거 구간을 보는 중이라 아래로 이어 불러올 대화가 있는지. 없으면 false */
+  hasNewer?: boolean;
+  /** 이후 대화를 불러오는 중인지. 없으면 false */
+  loadingNewer?: boolean;
+  /** 메시지 검색 상태. 없으면 검색 중이 아님 */
+  search?: RoomSearchState | null;
 }
 
 export type ChatBusMessage =
@@ -39,12 +45,22 @@ export type ChatBusMessage =
   | { kind: "room-focus"; roomId: number; focused: boolean; mainId?: string }
   // NOTE: 'room-read' 는 focus 기반 읽음 처리로 대체되어 더 이상 쓰지 않는다.
   | { kind: "room-send"; roomId: number; text: string; id: string; mainId?: string }
+  // 번호방 채팅창 → 메인: 첨부파일 전송 (업로드는 채팅창이 HTTP 로 직접 하고 fileId 만 넘긴다)
+  | { kind: "room-send-file"; roomId: number; fileId: string; id: string; mainId?: string }
   // 번호방 채팅창 → 메인: 방제목 수정 요청 (소켓은 메인 창에만 있으므로 경유)
   | { kind: "room-rename"; roomId: number; title: string; mainId?: string }
   // 번호방 채팅창 → 메인: 초대 요청 (소켓은 메인 창에만 있으므로 경유)
   | { kind: "room-invite"; roomId: number; memberNos: number[]; mainId?: string }
   // 번호방 채팅창 → 메인: 이전 대화 더보기 요청 (위로 스크롤 끝에 닿았을 때)
   | { kind: "room-load-older"; roomId: number; mainId?: string }
+  // 번호방 채팅창 → 메인: 메시지 검색 (빈 keyword = 검색 해제)
+  | { kind: "room-search"; roomId: number; keyword: string; mainId?: string }
+  // 번호방 채팅창 → 메인: 검색 결과 점프 (msgId 를 가운데 둔 한 페이지)
+  | { kind: "room-jump"; roomId: number; msgId: number; mainId?: string }
+  // 번호방 채팅창 → 메인: 점프 후 아래로 스크롤 끝에 닿았을 때 이후 대화
+  | { kind: "room-load-newer"; roomId: number; mainId?: string }
+  // 번호방 채팅창 → 메인: 점프 상태에서 최신 대화로 복귀
+  | { kind: "room-load-latest"; roomId: number; mainId?: string }
   // 메인 → 채팅창
   | ({ kind: "room-state" } & RoomStatePayload & { mainId?: string })
   | { kind: "main-ready"; mainId?: string }
@@ -100,6 +116,7 @@ export function createChatBusHub(): ChatBus & { add: (bus: ChatBus | null) => vo
 
 export function dedupeKeyFor(msg: ChatBusMessage): string | null {
   if (msg.kind === "room-send") return `room-send:${msg.id}`;
+  if (msg.kind === "room-send-file") return `room-send-file:${msg.id}`;
   return null;
 }
 

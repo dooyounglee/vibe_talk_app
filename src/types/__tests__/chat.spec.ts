@@ -132,3 +132,24 @@ describe("roomLastMessagePreview", () => {
     );
   });
 });
+
+describe("첨부파일 헬퍼", () => {
+  it("formatFileSize", async () => {
+    const { formatFileSize } = await import("../chat");
+    expect(formatFileSize(512)).toBe("512 B");
+    expect(formatFileSize(1536)).toBe("1.5 KB");
+    expect(formatFileSize(5 * 1024 * 1024)).toBe("5.0 MB");
+  });
+
+  it("toChatAttachment / attachmentPreviewText", async () => {
+    const { toChatAttachment, attachmentPreviewText, isImageAttachment } = await import("../chat");
+    expect(toChatAttachment(null)).toBeUndefined();
+    expect(toChatAttachment({ name: "x" })).toBeUndefined();
+    const img = toChatAttachment({ id: "k", name: "a.png", size: 3, mime: "image/png" })!;
+    expect(isImageAttachment(img)).toBe(true);
+    expect(attachmentPreviewText(img)).toBe("사진");
+    const doc = toChatAttachment({ id: "k2", name: "a.zip" })!;
+    expect(doc.mime).toBe("application/octet-stream");
+    expect(attachmentPreviewText(doc)).toBe("파일: a.zip");
+  });
+});

@@ -27,8 +27,9 @@ const roomTitle = computed(() =>
 
 const {
   messages, myUserNo, myNickname, roomName, connectionStatus,
-  isConnected, hasSession, members, users, send, renameRoom, invite, announceClose,
+  isConnected, hasSession, members, users, send, sendFiles, uploading, renameRoom, invite, announceClose,
   hasMore, loadingOlder, loadOlder,
+  hasNewer, loadingNewer, loadNewer, loadLatest, searchState, search, jumpTo,
 } = useChatRoom(roomId);
 
 // 상단 연필 → 방제목 변경 모달
@@ -95,6 +96,14 @@ const handleSend = (text: string) => {
   send(text);
 };
 
+// 첨부파일 전송 (📎 / 끌어놓기 / Ctrl+V). 실패한 파일이 있으면 채팅창 아래에 문구를 보여준다.
+const attachError = ref("");
+const handleSendFiles = async (files: File[]) => {
+  attachError.value = "";
+  const errors = await sendFiles(files);
+  if (errors.length > 0) attachError.value = errors.join(" / ");
+};
+
 const closeTauriWindow = async () => {
   try {
     if (isTauriRuntime()) {
@@ -131,8 +140,19 @@ const goHome = () => {
     :members="members"
     :has-more="hasMore"
     :loading-older="loadingOlder"
+    :has-newer="hasNewer"
+    :loading-newer="loadingNewer"
+    :search="searchState"
+    :uploading="uploading"
+    :attach-error="attachError"
     @send="handleSend"
+    @send-files="handleSendFiles"
+    @dismiss-attach-error="attachError = ''"
     @load-older="loadOlder"
+    @load-newer="loadNewer"
+    @load-latest="loadLatest"
+    @search="search"
+    @jump="jumpTo"
     @close="handleClose"
   >
     <template #header-actions>

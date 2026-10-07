@@ -443,6 +443,74 @@ describe("이전 대화 더보기 (msgId 커서)", () => {
   });
 });
 
+describe("메시지 검색 / 검색 결과 점프", () => {
+  const page = (ids: number[]) => ids.map((id) => ({ user_no: 11, text: `m${id}`, msgId: id }));
+  const textsOf = (store: Store, roomId: number) =>
+    (store.roomMessages.value[roomId] ?? []).map((m) => m.text);
+
+  it("검색을 보내고 같은 검색어의 결과만 반영한다", async () => {
+    const { store, ws } = await connectedStore();
+    expect(store.requestRoomSearch(5, "  회의  ")).toBe(true);
+    expect(ws.sentJson()).toEqual([{ type: "room_search", roomId: 5, keyword: "회의" }]);
+    expect(store.roomSearch.value[5]).toEqual({ keyword: "회의", ids: [], loading: true, truncated: false });
+    // 이전 검색어의 늦은 응답은 버린다
+    ws.receive({ type: "room_search_result", roomId: 5, keyword: "회", ids: [1], truncated: false });
+    expect(store.roomSearch.value[5].loading).toBe(true);
+    ws.receive({ type: "room_search_result", roomId: 5, keyword: "회의", ids: [30, 12, 3], truncated: true });
+    expect(store.roomSearch.value[5]).toEqual({ keyword: "회의", ids: [30, 12, 3], loading: false, truncated: true });
+  });
+
+  it("빈 검색어는 검색 해제이고, 해제 뒤 도착한 결과는 버린다", async () => {
+    const { store, ws } = await connectedStore();
+    store.requestRoomSearch(5, "회의");
+    expect(store.requestRoomSearch(5, "  ")).toBe(true);
+    expect(store.roomSearch.value[5]).toBeUndefined();
+    ws.receive({ type: "room_search_result", roomId: 5, keyword: "회의", ids: [1] });
+    expect(store.roomSearch.value[5]).toBeUndefined();
+    expect(ws.sentJson()).toHaveLength(1);
+  });
+
+  it("점프하면 대상 주변 페이지로 덮어쓰고 이후 대화를 이어 붙인다", async () => {
+    const { store, ws } = await connectedStore();
+    ws.receive({ type: "history_room", roomId: 5, messages: page([50, 51]), hasMore: true });
+    expect(store.requestMessagesAround(5, 20)).toBe(true);
+    expect(ws.sentJson()).toEqual([{ type: "room_history_around", roomId: 5, msgId: 20 }]);
+    ws.receive({ type: "history_room_around", roomId: 5, msgId: 20, messages: page([19, 20, 21]), hasMore: true, hasNewer: true });
+    expect(textsOf(store, 5)).toEqual(["m19", "m20", "m21"]);
+    expect(store.roomHasNewer.value[5]).toBe(true);
+
+    ws.sent = [];
+    expect(store.requestNewerMessages(5)).toBe(true);
+    expect(store.requestNewerMessages(5)).toBe(false); // 불러오는 중 중복 요청 없음
+    expect(ws.sentJson()).toEqual([{ type: "room_history_newer", roomId: 5, afterId: 21 }]);
+    ws.receive({ type: "history_room_newer", roomId: 5, afterId: 21, messages: page([21, 22, 23]), hasNewer: false });
+    expect(textsOf(store, 5)).toEqual(["m19", "m20", "m21", "m22", "m23"]);
+    expect(store.roomHasNewer.value[5]).toBe(false);
+    expect(store.roomLoadingNewer.value[5]).toBe(false);
+  });
+
+  it("이후 대화 응답 대기 중 목록이 바뀌었으면 이어 붙이지 않는다", async () => {
+    const { store, ws } = await connectedStore();
+    ws.receive({ type: "history_room_around", roomId: 5, msgId: 20, messages: page([20, 21]), hasNewer: true });
+    store.requestNewerMessages(5);
+    ws.receive({ type: "history_room", roomId: 5, messages: page([50, 51]), hasMore: true });
+    ws.receive({ type: "history_room_newer", roomId: 5, afterId: 21, messages: page([22]), hasNewer: true });
+    expect(textsOf(store, 5)).toEqual(["m50", "m51"]);
+    expect(store.roomHasNewer.value[5]).toBe(false);
+  });
+
+  it("과거 구간을 보는 중에는 실시간 메시지를 붙이지 않고, 최신 페이지를 받으면 해제된다", async () => {
+    const { store, ws } = await connectedStore();
+    ws.receive({ type: "history_room_around", roomId: 5, msgId: 20, messages: page([20]), hasNewer: true });
+    ws.receive({ type: "room_message", roomId: 5, from: "영희", from_no: 11, text: "새 글", msgId: 99 });
+    expect(textsOf(store, 5)).toEqual(["m20"]);
+    ws.receive({ type: "history_room", roomId: 5, messages: page([98, 99]), hasMore: true });
+    expect(store.roomHasNewer.value[5]).toBe(false);
+    ws.receive({ type: "room_message", roomId: 5, from: "영희", from_no: 11, text: "또 새 글", msgId: 100 });
+    expect(textsOf(store, 5)).toEqual(["m98", "m99", "또 새 글"]);
+  });
+});
+
 describe("requestOneToOneRoom", () => {
   it("room_opened를 받으면 방 번호로 resolve한다", async () => {
     const { store, ws } = await connectedStore();
