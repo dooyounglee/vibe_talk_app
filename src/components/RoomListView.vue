@@ -5,6 +5,7 @@ import {
   formatRoomTime,
   roomDisplayName,
   roomLastMessagePreview,
+  roomRawName,
 } from "../types/chat";
 
 const props = defineProps<{
@@ -38,6 +39,25 @@ const sortedRooms = computed<RoomInfo[]>(() =>
     return b.roomId - a.roomId;
   }),
 );
+
+// ─── 채팅방 검색 ───
+// 방 제목(축약 전 원본: 1:1=상대 닉네임, 그룹=참여자 이름 연결)과 방장 닉네임을
+// 대소문자 무시 부분일치로 찾는다. 정렬은 sortedRooms 순서를 그대로 유지한다.
+const keyword = ref("");
+const filteredRooms = computed<RoomInfo[]>(() => {
+  const q = keyword.value.trim().toLowerCase();
+  if (!q) return sortedRooms.value;
+  return sortedRooms.value.filter(
+    (room) =>
+      roomRawName(room).toLowerCase().includes(q) ||
+      (room.owner ?? "").toLowerCase().includes(q),
+  );
+});
+
+// Esc: 검색어만 지운다 (메뉴 닫기는 전역 keydown 핸들러가 처리)
+const clearKeyword = () => {
+  keyword.value = "";
+};
 
 const toggleMenu = (e: MouseEvent) => {
   e.stopPropagation();
@@ -150,10 +170,23 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <div v-if="rooms.length > 0" class="search-row">
+      <span class="search-icon">🔍</span>
+      <input
+        v-model="keyword"
+        class="search-input"
+        type="text"
+        placeholder="채팅방 이름, 참여자 검색"
+        @keyup.esc="clearKeyword"
+      />
+      <button v-if="keyword" class="search-clear" title="검색어 지우기" @click.stop="clearKeyword">×</button>
+    </div>
+
     <p v-if="rooms.length === 0" class="empty">속한 방이 없습니다. 방을 만드세요.</p>
+    <p v-else-if="filteredRooms.length === 0" class="empty">'{{ keyword.trim() }}' 검색 결과가 없습니다.</p>
     <ul class="room-list">
       <li
-        v-for="room in sortedRooms"
+        v-for="room in filteredRooms"
         :key="room.roomId"
         class="room-item"
         :class="{ unread: (unread[room.roomId] ?? 0) > 0 }"
@@ -229,6 +262,19 @@ onBeforeUnmount(() => {
 .ctx-menu button.danger { color: #b3261e; }
 /* 방 개별 컨텍스트 메뉴: 뷰포트 기준 고정 위치 */
 .ctx-menu.room-ctx { position: fixed; right: auto; min-width: 150px; }
+/* 채팅방 검색창 (UserSearchInput과 동일한 모양) */
+.search-row { display: flex; align-items: center; gap: 6px; }
+.search-icon { font-size: 13px; flex-shrink: 0; }
+.search-input {
+  flex: 1; min-width: 0; padding: 8px 10px; font-size: 14px;
+  border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box;
+}
+.search-input:focus { outline: none; border-color: #007bff; }
+.search-clear {
+  border: none; background: none; color: #999; font-size: 16px;
+  line-height: 1; padding: 0 4px; cursor: pointer; flex-shrink: 0;
+}
+.search-clear:hover { color: #d33; }
 .empty { color: #888; font-size: 14px; margin: 0; }
 .room-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .room-item { display: flex; align-items: center; gap: 10px; background: #fff; border-radius: 10px; padding: 10px 12px; cursor: pointer; user-select: none; }
