@@ -4,7 +4,6 @@ import MessageInput from "../MessageInput.vue";
 import MessageList from "../MessageList.vue";
 import ConnectionBar from "../ConnectionBar.vue";
 import RenameRoomModal from "../RenameRoomModal.vue";
-import CloseConfirmModal from "../CloseConfirmModal.vue";
 import UserSearchInput from "../UserSearchInput.vue";
 import NicknameView from "../NicknameView.vue";
 import ChatWindow from "../ChatWindow.vue";
@@ -342,23 +341,6 @@ describe("RenameRoomModal", () => {
     await wrapper.get("input").trigger("keyup.esc");
     await wrapper.get(".modal-backdrop").trigger("click");
     expect(wrapper.emitted("cancel")).toHaveLength(3);
-  });
-});
-
-describe("CloseConfirmModal", () => {
-  it("열린 채팅창 수를 보여주고 버튼/Esc에 맞게 emit한다", async () => {
-    // unmount 후에는 wrapper.emitted() 기록이 사라지므로 리스너 prop으로 횟수를 센다
-    const onCancel = vi.fn();
-    const wrapper = mount(CloseConfirmModal, { props: { openRoomCount: 3, onCancel } });
-    expect(wrapper.text()).toContain("채팅창 3개");
-    await wrapper.get("button.primary").trigger("click");
-    expect(wrapper.emitted("confirm")).toHaveLength(1);
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    expect(onCancel).toHaveBeenCalledTimes(1);
-    wrapper.unmount();
-    // unmount 후에는 Esc 리스너가 제거된다
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });
 

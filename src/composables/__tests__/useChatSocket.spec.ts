@@ -208,6 +208,26 @@ describe("수신 메시지 처리", () => {
     expect(store.roomUnread.value[1]).toBeUndefined();
   });
 
+  it("room_message: 남의 메시지이고 보고 있지 않은 방일 때만 알림 리스너를 부른다", async () => {
+    const { store, ws } = await connectedStore(10);
+    const listener = vi.fn();
+    const off = store.onIncomingRoomMessage(listener);
+    ws.receive({ type: "room_message", roomId: 1, from: "영희", from_no: 11, text: "하이" });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener.mock.calls[0][0]).toMatchObject({ roomId: 1, nickname: "영희", text: "하이" });
+
+    // 내 메시지(다른 PC에서 보낸 것 포함)는 알리지 않는다
+    ws.receive({ type: "room_message", roomId: 1, from: "철수", from_no: 10, text: "나" });
+    // 보고 있는(focus) 방은 알리지 않는다
+    store.setRoomFocus(2, true);
+    ws.receive({ type: "room_message", roomId: 2, from: "영희", from_no: 11, text: "보는 중" });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    off();
+    ws.receive({ type: "room_message", roomId: 1, from: "영희", from_no: 11, text: "해제 후" });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it("system: 방 번호가 있을 때만 박스에 넣는다", async () => {
     const { store, ws } = await connectedStore();
     ws.receive({ type: "system", roomId: 3, text: "영희님이 들어왔습니다" });

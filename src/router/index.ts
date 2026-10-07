@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-rou
 import HomeView from "../views/HomeView.vue";
 import RoomView from "../views/RoomView.vue";
 import ImageView from "../views/ImageView.vue";
+import ToastView from "../views/ToastView.vue";
 
 // hash 히스토리 사용: Tauri 빌드(file://)와 vite dev 서버 모두에서 동작
 // NOTE: 1:1 대화도 방 하나이므로 '#/room/:roomId' 경로만 쓴다.
@@ -22,6 +23,12 @@ const routes: RouteRecordRaw[] = [
     path: "/image/:fileId",
     name: "image",
     component: ImageView,
+  },
+  {
+    // 새 메시지 알림 카드 창 (우측하단). utils/toastWindow.ts 가 띄운다
+    path: "/toast",
+    name: "toast",
+    component: ToastView,
   },
 ];
 

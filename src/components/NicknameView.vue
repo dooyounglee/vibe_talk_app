@@ -109,8 +109,8 @@ const onEnter = () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100vh;
-  height: 100dvh;
+  height: calc(100vh - var(--titlebar-h, 0px));
+  height: calc(100dvh - var(--titlebar-h, 0px));
   background: #f4f6f8;
   font-family: sans-serif;
 }

@@ -214,6 +214,31 @@ const forgetRoomFocus = (roomId: number) => {
   if (focusedRooms.value[roomId]) delete focusedRooms.value[roomId];
 };
 
+// ─── 새 메시지 수신 알림 (우측하단 알림 카드용) ───
+// 남이 보낸 메시지이고, 그 방을 지금 보고 있지(focus) 않을 때만 리스너를 부른다.
+type IncomingRoomMessageListener = (msg: ChatMessage) => void;
+const incomingRoomMessageListeners = new Set<IncomingRoomMessageListener>();
+
+/** 새 메시지 수신 리스너 등록. 반환 함수로 해제한다 */
+const onIncomingRoomMessage = (fn: IncomingRoomMessageListener): (() => void) => {
+  incomingRoomMessageListeners.add(fn);
+  return () => {
+    incomingRoomMessageListeners.delete(fn);
+  };
+};
+
+const notifyIncomingRoomMessage = (msg: ChatMessage) => {
+  const roomId = msg.roomId ?? 0;
+  if (msg.user_no === myUserNo.value || isRoomFocused(roomId)) return;
+  incomingRoomMessageListeners.forEach((fn) => {
+    try {
+      fn(msg);
+    } catch {
+      // 무시 — 알림 실패가 수신 처리를 막지 않게 한다
+    }
+  });
+};
+
 const ensureRoomBox = (roomId: number): Array<ChatMessage> => {
   if (!roomMessages.value[roomId]) {
     roomMessages.value[roomId] = [];
@@ -648,6 +673,7 @@ const handleIncoming = (raw: string) => {
       room.lastMessageAt = msg.timestamp ?? null;
       room.lastMessageSender = from;
     }
+    notifyIncomingRoomMessage(msg);
   } else if (data.type === "room_last_message") {
     // 방에 메시지가 저장될 때마다 서버가 멤버에게 보내는 목록 갱신 신호
     const roomId = Number(data.roomId);
@@ -1335,6 +1361,7 @@ export function useChatSocket() {
     isRoomFocused,
     setRoomFocus,
     forgetRoomFocus,
+    onIncomingRoomMessage,
     connect,
     attemptReconnect,
     manualReconnect,

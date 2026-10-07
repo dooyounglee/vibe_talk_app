@@ -259,7 +259,7 @@ const goHome = () => {
 .image-btn:disabled,
 .invite-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .no-session {
-  height: 100vh; height: 100dvh;
+  height: calc(100vh - var(--titlebar-h, 0px)); height: calc(100dvh - var(--titlebar-h, 0px));
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   gap: 16px; background: #f4f6f8;

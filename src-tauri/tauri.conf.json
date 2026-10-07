@@ -16,6 +16,7 @@
         "title": "mykatalk",
         "width": 400,
         "height": 600,
+        "decorations": false,
         "dragDropEnabled": false
       }
     ],
