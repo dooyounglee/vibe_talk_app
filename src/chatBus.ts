@@ -18,6 +18,8 @@ export const CHAT_BUS_NAME = "vibe-talk-bus";
 export interface RoomStatePayload {
   roomId: number;
   roomName: string;
+  /** 방장 user_no (참여자 모달의 '방장' 표시용). 없으면 null 로 본다 */
+  ownerNo?: number | null;
   myUserNo: number | null;
   myNickname: string;
   messages: ChatMessage[];

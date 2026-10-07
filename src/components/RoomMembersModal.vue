@@ -7,17 +7,21 @@ import ProfileAvatar from "./ProfileAvatar.vue";
 const props = defineProps<{
   members: ChatUser[];
   myUserNo: number | null;
+  /** 방장 user_no. 해당 참여자 옆에 '방장' 배지를 붙인다 */
+  ownerNo?: number | null;
 }>();
 
 const emit = defineEmits<{
   (e: "close"): void;
 }>();
 
-// 나를 맨 위에, 나머지는 닉네임 순으로 보여준다.
+// 나를 맨 위에, 그다음 방장, 나머지는 닉네임 순으로 보여준다.
 const sortedMembers = computed<ChatUser[]>(() =>
   [...props.members].sort((a, b) => {
     if (a.user_no === props.myUserNo) return -1;
     if (b.user_no === props.myUserNo) return 1;
+    if (a.user_no === props.ownerNo) return -1;
+    if (b.user_no === props.ownerNo) return 1;
     return a.nickname.localeCompare(b.nickname, "ko");
   }),
 );
@@ -36,6 +40,7 @@ const close = () => emit("close");
         <li v-for="m in sortedMembers" :key="m.user_no" class="member-item">
           <ProfileAvatar :image="m.profileImage" :size="30" />
           <span class="name">{{ m.nickname }}</span>
+          <span v-if="ownerNo != null && m.user_no === ownerNo" class="owner-badge">방장</span>
           <span v-if="m.user_no === myUserNo" class="me-badge">나</span>
         </li>
       </ul>
@@ -92,6 +97,13 @@ const close = () => emit("close");
   font-size: 11px;
   color: #fff;
   background: #007bff;
+  border-radius: 8px;
+  padding: 2px 6px;
+}
+.owner-badge {
+  font-size: 11px;
+  color: #fff;
+  background: #f59f00;
   border-radius: 8px;
   padding: 2px 6px;
 }

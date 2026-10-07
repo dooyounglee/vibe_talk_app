@@ -263,6 +263,7 @@ const broadcastRoom = (roomId: number) => {
     kind: "room-state",
     roomId,
     roomName: (info?.displayName?.trim() ? info.displayName : info?.name) ?? "",
+    ownerNo: info?.owner_no || null,
     myUserNo: myUserNo.value,
     myNickname: nickname.value,
     messages: [...(roomMessages.value[roomId] ?? [])],

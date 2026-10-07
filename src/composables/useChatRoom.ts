@@ -32,6 +32,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
   const busMembers = ref<ChatUser[]>([]);
   const busUsers = ref<ChatUser[]>([]);
   const busRoomName = ref("");
+  const busOwnerNo = ref<number | null>(null);
   const busConnectionStatus = ref("메인 창에 연결 중...");
   const busIsConnected = ref(false);
   const busHasMore = ref(false);
@@ -131,6 +132,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
         msg.hasMore === true, msg.loadingOlder === true,
         msg.hasNewer === true, msg.loadingNewer === true, msg.search ?? null,
       );
+      busOwnerNo.value = typeof msg.ownerNo === "number" ? msg.ownerNo : null;
     } else if (msg.kind === "main-ready") {
       announceOpen();
       // "아직 보고 있는 중"도 함께 알려 배지가 되살아나지 않게 한다
@@ -214,6 +216,10 @@ export function useChatRoom(roomId: { readonly value: number }) {
     // 화면 표기는 20자까지 축약하되, 목록과 창 제목이 서로 어긋나지 않게 같은 함수를 쓴다.
     return roomDisplayName(info);
   });
+  // 방장 user_no (참여자 모달에서 '방장' 배지 표시용)
+  const ownerNo: ComputedRef<number | null> = computed(() =>
+    direct.value ? (myInfo.value?.owner_no || null) : busOwnerNo.value,
+  );
   const myUserNo: ComputedRef<number | null> = computed(() =>
     direct.value ? store.myUserNo.value : busUserNo.value,
   );
@@ -467,6 +473,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
     myUserNo,
     myNickname,
     roomName: rname,
+    ownerNo,
     members,
     users,
     connectionStatus,

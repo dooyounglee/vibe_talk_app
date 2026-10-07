@@ -26,7 +26,7 @@ const roomTitle = computed(() =>
 );
 
 const {
-  messages, myUserNo, myNickname, roomName, connectionStatus,
+  messages, myUserNo, myNickname, roomName, ownerNo, connectionStatus,
   isConnected, hasSession, members, users, send, sendFiles, uploading, renameRoom, invite, announceClose,
   hasMore, loadingOlder, loadOlder,
   hasNewer, loadingNewer, loadNewer, loadLatest, searchState, search, jumpTo,
@@ -138,6 +138,7 @@ const goHome = () => {
     :connection-status="connectionStatus"
     :is-connected="isConnected"
     :members="members"
+    :owner-no="ownerNo"
     :has-more="hasMore"
     :loading-older="loadingOlder"
     :has-newer="hasNewer"

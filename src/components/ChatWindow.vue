@@ -19,6 +19,8 @@ const props = withDefaults(
     isConnected: boolean;
     /** 현재 채팅방 참여자 (상단 '참여자' 버튼 모달에 표시) */
     members?: ChatUser[];
+    /** 방장 user_no (참여자 모달에 '방장' 배지 표시) */
+    ownerNo?: number | null;
     /** 더 불러올 이전 대화가 있는지 (위로 스크롤 무한로딩) */
     hasMore?: boolean;
     /** 이전 대화를 불러오는 중인지 */
@@ -35,7 +37,7 @@ const props = withDefaults(
     attachError?: string;
   }>(),
   {
-    members: () => [], hasMore: false, loadingOlder: false,
+    members: () => [], ownerNo: null, hasMore: false, loadingOlder: false,
     hasNewer: false, loadingNewer: false, search: null,
     uploading: false, attachError: "",
   },
@@ -602,6 +604,7 @@ watch(
     v-if="showMembersModal"
     :members="members"
     :my-user-no="myUserNo"
+    :owner-no="ownerNo"
     @close="showMembersModal = false"
   />
 </template>

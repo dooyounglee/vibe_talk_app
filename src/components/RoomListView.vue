@@ -41,17 +41,13 @@ const sortedRooms = computed<RoomInfo[]>(() =>
 );
 
 // ─── 채팅방 검색 ───
-// 방 제목(축약 전 원본: 1:1=상대 닉네임, 그룹=참여자 이름 연결)과 방장 닉네임을
+// 방 제목(축약 전 원본: 1:1=상대 닉네임, 그룹=참여자 이름 연결)을
 // 대소문자 무시 부분일치로 찾는다. 정렬은 sortedRooms 순서를 그대로 유지한다.
 const keyword = ref("");
 const filteredRooms = computed<RoomInfo[]>(() => {
   const q = keyword.value.trim().toLowerCase();
   if (!q) return sortedRooms.value;
-  return sortedRooms.value.filter(
-    (room) =>
-      roomRawName(room).toLowerCase().includes(q) ||
-      (room.owner ?? "").toLowerCase().includes(q),
-  );
+  return sortedRooms.value.filter((room) => roomRawName(room).toLowerCase().includes(q));
 });
 
 // Esc: 검색어만 지운다 (메뉴 닫기는 전역 keydown 핸들러가 처리)
@@ -196,7 +192,6 @@ onBeforeUnmount(() => {
         <span class="room-id">#{{ room.roomId }}</span>
         <span class="room-main">
           <span class="room-name">{{ roomDisplayName(room) }}</span>
-          <span class="room-meta">방장 {{ room.owner }} · {{ room.memberCount }}명</span>
           <span v-if="roomLastMessagePreview(room, props.myNickname)" class="room-preview">
             {{ roomLastMessagePreview(room, props.myNickname) }}
           </span>
@@ -285,7 +280,6 @@ onBeforeUnmount(() => {
 .room-id { font-weight: bold; color: #007bff; min-width: 44px; }
 .room-main { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .room-name { font-size: 15px; font-weight: 600; word-break: break-all; }
-.room-meta { font-size: 12px; color: #666; }
 /* 마지막 메시지 미리보기: 한 줄 고정 + 말줄임 */
 .room-preview {
   font-size: 12px; color: #444; margin-top: 2px;
