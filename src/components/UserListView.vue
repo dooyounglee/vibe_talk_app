@@ -12,6 +12,8 @@ const props = defineProps<{
   onlineUsers: number[];
   /** 서버가 방송한 사용자별 상태 (user_no → 상태) */
   userStatuses: Record<number, MyStatus>;
+  /** 내 상태 (admin 목록에는 본인도 포함되므로 본인 행에 사용) */
+  myStatus: MyStatus;
   connectionStatus: string;
   isConnected: boolean;
   isAdmin: boolean;
@@ -30,7 +32,7 @@ const emit = defineEmits<{
   (e: "upsert-user", payload: { loginId: string; nickname: string; phone: string | null; userName: string | null; isDeleted: boolean; deptNo: number | null }): void;
 }>();
 
-// admin에게 보여줄 목록: 탈퇴 포함 전체, 일반 사용자는 users 그대로
+// admin에게 보여줄 목록: 본인·탈퇴 포함 DB 전체, 일반 사용자는 users 그대로 (서버가 admin 제외)
 const displayUsers = computed(() => {
   if (props.isAdmin) return props.usersDetail;
   return props.users.map((u) => ({ user_no: u.user_no, loginId: "", nickname: u.nickname, isDeleted: false, profileImage: u.profileImage ?? null }));
@@ -58,8 +60,9 @@ const sortedUsers = computed<DisplayUser[]>(() => {
 
 // ─── 사용자 상태 (이모티콘/상태문구) ───
 // 서버가 방송한 userStatuses에서 상태를 읽는다. 맵에 없거나 접속 중이 아닌
-// 사용자는 offline으로 취급한다(접속 해제 자동 반영). 목록에는 본인이 제외되므로 별도 처리 없다.
+// 사용자는 offline으로 취급한다(접속 해제 자동 반영). 본인(admin 목록에만 있음)은 내 상태를 쓴다.
 const statusOf = (userNo: number): MyStatus => {
+  if (userNo === props.myUserNo) return props.myStatus;
   const raw: MyStatus | undefined = props.userStatuses[userNo];
   if (raw === undefined || !props.onlineUsers.includes(userNo)) return "offline";
   return MY_STATUS_OPTIONS.some((o) => o.value === raw) ? raw : "offline";
@@ -235,17 +238,18 @@ const closeDetailModal = () => {
         :key="u.user_no"
         class="user-item"
         :class="{ withdrawn: u.isDeleted }"
-        @dblclick="$emit('open-chat', { user_no: u.user_no, nickname: u.nickname })"
-        @contextmenu="(e) => onContextMenu(e, { user_no: u.user_no, nickname: u.nickname })"
-        :title="u.nickname + '님과 1:1 채팅 / 우클릭: 메뉴'"
+        @dblclick="u.user_no !== myUserNo && $emit('open-chat', { user_no: u.user_no, nickname: u.nickname })"
+        @contextmenu="(e) => u.user_no === myUserNo ? e.preventDefault() : onContextMenu(e, { user_no: u.user_no, nickname: u.nickname })"
+        :title="u.user_no === myUserNo ? u.nickname + ' (나)' : u.nickname + '님과 1:1 채팅 / 우클릭: 메뉴'"
       >
         <ProfileAvatar :image="u.profileImage" :size="32" />
         <span class="name">{{ u.nickname }}</span>
+        <span v-if="u.user_no === myUserNo" class="me-badge">나</span>
         <span v-if="isAdmin && deptNameOf((u as UserDetail).deptNo)" class="dept-tag">{{ deptNameOf((u as UserDetail).deptNo) }}</span>
         <span v-if="u.isDeleted" class="withdrawn-tag">탈퇴</span>
         <span
           class="presence"
-          :class="onlineUsers.includes(u.user_no) ? 'online' : 'offline'"
+          :class="u.user_no === myUserNo || onlineUsers.includes(u.user_no) ? 'online' : 'offline'"
           :title="statusTextOf(u.user_no)"
         >{{ statusEmojiOf(u.user_no) }}</span>
         <button
@@ -255,6 +259,7 @@ const closeDetailModal = () => {
           @click.stop="openEditModal(u)"
         >수정</button>
         <button
+          v-if="u.user_no !== myUserNo"
           class="more-btn"
           title="더보기"
           @click="(e) => onMoreClick(e, { user_no: u.user_no, nickname: u.nickname })"
@@ -472,6 +477,13 @@ const closeDetailModal = () => {
 .ctx-menu button:hover { background: #f2f7ff; }
 .ctx-menu button + button { border-top: 1px solid #eee; }
 .user-item.withdrawn { opacity: 0.75; }
+.me-badge {
+  font-size: 11px;
+  color: #fff;
+  background: #007bff;
+  border-radius: 8px;
+  padding: 2px 6px;
+}
 .withdrawn-tag {
   font-size: 11px;
   color: #fff;

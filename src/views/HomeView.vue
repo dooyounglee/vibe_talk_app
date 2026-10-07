@@ -889,7 +889,7 @@ const visibleRooms = computed<RoomInfo[]>(() =>
         내 채팅방 ({{ visibleRooms.length }})
       </button>
       <button :class="{ active: mainTab === 'users' }" @click="mainTab = 'users'">
-        사용자 ({{ userlist.length }})
+        사용자 ({{ isAdmin() ? usersDetail.length : userlist.length }})
       </button>
       <button v-if="isAdmin()" :class="{ active: mainTab === 'settings' }" @click="mainTab = 'settings'">
         설정
@@ -922,6 +922,7 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       :users="userlist"
       :online-users="onlineUsers"
       :user-statuses="userStatuses"
+      :my-status="myStatus"
       :connection-status="connectionStatus"
       :is-connected="isConnected"
       :is-admin="isAdmin()"

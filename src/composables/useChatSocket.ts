@@ -398,7 +398,7 @@ const handleIncoming = (raw: string) => {
     }
     userStatuses.value = statuses;
   } else if (data.type === "userlist_detail") {
-    // admin 전용: 탈퇴 포함 전체 사용자 상세 (본인 제외)
+    // admin 전용: 탈퇴 포함 전체 사용자 상세 (본인 포함 — DB의 모든 계정)
     const detail = Array.isArray(data.usersDetail) ? data.usersDetail : [];
     usersDetail.value = detail
       .map((raw) => {
@@ -417,7 +417,7 @@ const handleIncoming = (raw: string) => {
           profileImage: toChatAttachment(d.profileImage) ?? null,
         };
       })
-      .filter((d) => d.user_no > 0 && d.user_no !== myUserNo.value);
+      .filter((d) => d.user_no > 0);
   } else if (data.type === "dept_list") {
     depts.value = Array.isArray(data.depts) ? data.depts : [];
   } else if (data.type === "dept_upsert_result") {
