@@ -313,12 +313,18 @@ describe("RenameRoomModal", () => {
     expect(wrapper.emitted("confirm")).toEqual([["새 제목"]]);
   });
 
-  it("빈 제목이면 오류를 보여주고 confirm하지 않는다", async () => {
+  it("빈 제목이면 기본 제목으로 되돌리도록 빈 값으로 confirm한다", async () => {
     const wrapper = mount(RenameRoomModal, { props: { currentTitle: "개발팀" } });
     await wrapper.get("input").setValue("   ");
     await wrapper.get("button.primary").trigger("click");
+    expect(wrapper.emitted("confirm")).toEqual([[""]]);
+  });
+
+  it("제목을 바꾸지 않고 저장하면 confirm 없이 cancel한다", async () => {
+    const wrapper = mount(RenameRoomModal, { props: { currentTitle: "kim,sam" } });
+    await wrapper.get("button.primary").trigger("click");
     expect(wrapper.emitted("confirm")).toBeUndefined();
-    expect(wrapper.get(".error").text()).toBe("방제목을 입력하세요.");
+    expect(wrapper.emitted("cancel")).toHaveLength(1);
   });
 
   it("서버 실패 사유를 보여주고, 취소/Esc/배경 클릭은 cancel", async () => {

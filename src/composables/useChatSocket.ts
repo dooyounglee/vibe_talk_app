@@ -936,8 +936,9 @@ const refreshRooms = (): boolean => {
 // 서버가 room_members.display_name의 "내 행"만 고치므로 같은 방의 다른 멤버는
 // 영향을 받지 않는다. (1:1방/단체방 구분 없이 동일하게 동작한다)
 const renameRoom = (roomId: number, title: string): boolean => {
+  // 빈 제목 = 기본 제목(나를 제외한 참여자 이름)으로 되돌리기 — 서버가 display_name을 NULL로 비운다
   const trimmed = title.trim().slice(0, ROOM_TITLE_INPUT_MAX_LENGTH);
-  if (!Number.isInteger(roomId) || !trimmed) return false;
+  if (!Number.isInteger(roomId)) return false;
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   roomRenameError.value = null;
   ws.send(JSON.stringify({ type: "room_rename", roomId, title: trimmed }));
@@ -946,7 +947,7 @@ const renameRoom = (roomId: number, title: string): boolean => {
 
 // ─── 번호방: 초대 (메인 창의 단일 소켓으로 전송) ───
 // 채팅창/목록에서 고른 대상 user_no를 방에 추가해 달라고 서버에 요청한다.
-// 서버는 멤버 추가 + 초대받은 멤버의 제목 기본값(닉네임 나열)을 DB에 저장한다.
+// 서버는 멤버를 추가하고, 멤버 전원에게 다시 계산된 방제(나를 제외한 참여자 이름)가 담긴 my_rooms를 보낸다.
 const sendRoomInvite = (roomId: number, memberNos: number[]): boolean => {
   const uniq = [...new Set(
     (Array.isArray(memberNos) ? memberNos : [])

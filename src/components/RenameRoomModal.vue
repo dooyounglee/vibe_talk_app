@@ -34,13 +34,15 @@ watch(
 );
 
 // 제목은 사용자별 관리라 방의 다른 멤버에게는 보이지 않는다는 점을 안내한다.
+// 빈 값으로 저장 = 직접 지정한 제목을 지우고 기본 제목(나를 제외한 참여자 이름)으로 되돌리기.
+// 그대로 저장하면 아무것도 바꾸지 않는다 (기본 제목이 고정 제목으로 저장되어 멤버 변동을 못 따라가는 것 방지).
 const confirm = () => {
   const title = draft.value.trim();
-  if (title === "") {
-    error.value = "방제목을 입력하세요.";
+  error.value = "";
+  if (title === props.currentTitle.trim()) {
+    emit("cancel");
     return;
   }
-  error.value = "";
   emit("confirm", title);
 };
 
@@ -62,7 +64,7 @@ const close = () => emit("cancel");
         @keyup.esc="close"
       />
       <p class="counter">{{ draft.length }} / {{ ROOM_TITLE_INPUT_MAX_LENGTH }}</p>
-      <p class="modal-desc">변경한 제목은 나에게만 적용됩니다. 다른 참여자는 원래 제목을 봅니다.</p>
+      <p class="modal-desc">변경한 제목은 나에게만 적용됩니다. 다른 참여자는 원래 제목을 봅니다.<br />비우고 저장하면 기본 제목(참여자 이름)으로 돌아갑니다.</p>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="errorReason" class="error">{{ errorReason }}</p>
       <div class="modal-btns">

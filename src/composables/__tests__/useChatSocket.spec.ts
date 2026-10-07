@@ -347,11 +347,12 @@ describe("보내는 액션", () => {
     expect(ws.sentJson()).toEqual([{ type: "room_create", memberNos: [11, 12] }]);
   });
 
-  it("renameRoom은 최대 길이로 자르고 빈 제목은 막는다", async () => {
+  it("renameRoom은 최대 길이로 자르고 빈 제목은 기본 제목 복원으로 보낸다", async () => {
     const { store, ws } = await connectedStore();
-    expect(store.renameRoom(1, "  ")).toBe(false);
     store.renameRoom(1, "가".repeat(40));
     expect(ws.sentJson()[0]).toEqual({ type: "room_rename", roomId: 1, title: "가".repeat(30) });
+    expect(store.renameRoom(1, "  ")).toBe(true);
+    expect(ws.sentJson()[1]).toEqual({ type: "room_rename", roomId: 1, title: "" });
   });
 
   it("sendRoomInvite는 유효한 user_no만 중복 없이 보낸다", async () => {
