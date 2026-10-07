@@ -28,8 +28,8 @@ import {
   type ChatBus,
   type ChatBusHandler,
 } from "../chatBus";
-import { LOGIN_ID_STORAGE_KEY, MAIN_ID_STORAGE_KEY } from "../constants";
-import { isAutoLogin, setAutoLogin } from "../loginPrefs";
+import { MAIN_ID_STORAGE_KEY } from "../constants";
+import { isAutoLogin, loadSavedLogin, setAutoLogin } from "../loginPrefs";
 
 // 이 메인 창이 유일한 WebSocket 소유자.
 // 채팅방 창(별도 윈도우)은 소켓을 만들지 않고 이벤트 버스로 상태를 받아간다.
@@ -371,7 +371,6 @@ const handleLeave = () => {
     // 무시
   }
   disconnect();
-  localStorage.removeItem(LOGIN_ID_STORAGE_KEY);
   // 직접 로그아웃했으면 다음 실행 때 자동로그인하지 않는다 (저장된 아이디/비밀번호는 유지)
   setAutoLogin(false);
   // 열려 있던 채팅방 창들을 함께 닫는다
@@ -574,22 +573,19 @@ onMounted(() => {
       .catch(() => undefined);
   }
 
-  // 새로고침해도 저장된 닉네임으로 자동 입장
-  // (동일 탭 라우팅 복귀 시 기존 소켓이 살아있으면 재사용)
-  // 새로 접속하는 것은 로그인 화면에서 "자동로그인"을 켠 경우에만 한다.
+  // 동일 탭 라우팅 복귀 시 기존 소켓이 살아있으면 그대로 재사용하고,
+  // 새로고침 등으로 새로 접속하는 것은 로그인 화면에서 "자동로그인"을 켠 경우에만
+  // 저장된 아이디("비밀번호 저장" 값)로 한다.
   // 단, window.close() 실패로 홈으로 떨어진 팝업(채팅창)에서는 자동 접속하지 않는다.
   // 자동 접속하면 같은 닉네임의 두 번째 소켓이 생기기 때문이다.
   const isPopupWindow = window.opener != null && !window.opener.closed;
   if (!isPopupWindow) {
-    const saved = localStorage.getItem(LOGIN_ID_STORAGE_KEY);
-    if (saved && saved.trim() !== "") {
-      if (loginId.value === saved && isConnected.value) {
+    if (loginId.value.trim() !== "" && isConnected.value) {
+      entered.value = true;
+    } else if (isAutoLogin()) {
+      const saved = loadSavedLogin();
+      if (saved && saved.loginId.trim() !== "" && connect(saved.loginId)) {
         entered.value = true;
-      } else if (isAutoLogin()) {
-        const ok = connect(saved);
-        if (ok) {
-          entered.value = true;
-        }
       }
     }
   }

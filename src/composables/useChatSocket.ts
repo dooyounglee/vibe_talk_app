@@ -10,7 +10,6 @@ import {
   attachmentPreviewText,
   toChatAttachment,
 } from "../types/chat";
-import { LOGIN_ID_STORAGE_KEY, MY_STATUS_STORAGE_KEY } from "../constants";
 
 // ─── 모듈 싱글톤 상태 ───
 const isConnected = ref(false);
@@ -24,28 +23,14 @@ const myProfileImage = ref<ChatAttachment | null>(null);
 
 // ─── 내 상태 (접속/오프라인/회의중/바쁨/자리비움) ───
 // 메인 화면 상단 드롭다운에서 고른 값.
-// localStorage에 남겨 새로고침 후에도 유지하고, status_set으로 서버에도 보내
-// 다른 사용자에게 상태를 보여준다.
-// localStorage 접근은 사용자가 저장을 막은 환경에서 예외가 날 수 있어 전부 try/catch로 감싼다.
-const loadMyStatus = (): MyStatus => {
-  try {
-    const saved = localStorage.getItem(MY_STATUS_STORAGE_KEY);
-    return normalizeMyStatus(saved);
-  } catch {
-    return DEFAULT_MY_STATUS;
-  }
-};
-const myStatus = ref<MyStatus>(loadMyStatus());
+// 브라우저에 저장하지 않으므로 접속할 때마다 기본값(접속)으로 시작하고,
+// status_set으로 서버에 보내 다른 사용자에게 상태를 보여준다.
+const myStatus = ref<MyStatus>(DEFAULT_MY_STATUS);
 
-/** 내 상태 변경: 화면 상태를 갱신하고 이 브라우저에 저장한 뒤 서버(status_set)로도 전파한다 */
+/** 내 상태 변경: 화면 상태를 갱신하고 서버(status_set)로도 전파한다 */
 const setMyStatus = (value: MyStatus) => {
   const next = normalizeMyStatus(value);
   myStatus.value = next;
-  try {
-    localStorage.setItem(MY_STATUS_STORAGE_KEY, next);
-  } catch {
-    // 저장 실패(저장 차단 환경 등)는 무시한다. 화면 반영만으로 동작은 충분하다.
-  }
   // 서버 전파 — 다른 사용자의 '사용자' 탭에 내 상태가 보이도록 한다.
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {
@@ -1055,11 +1040,8 @@ const connect = (loginIdInput: string): boolean => {
   loginId.value = trimmed;
   nickname.value = "";
   myUserNo.value = null;
-  try {
-    localStorage.setItem(LOGIN_ID_STORAGE_KEY, trimmed);
-  } catch {
-    // 무시
-  }
+  // 서버도 join 시 기본값(online)으로 되돌리므로 화면 상태를 맞춘다
+  myStatus.value = DEFAULT_MY_STATUS;
   if (loginChanged) {
     myRooms.value = [];
     roomMessages.value = {};

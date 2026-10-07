@@ -12,7 +12,6 @@ import {
 } from "../chatBus";
 import type { ChatMessage, ChatUser, RoomSearchState } from "../types/chat";
 import { roomDisplayName, truncateRoomTitle, ROOM_TITLE_INPUT_MAX_LENGTH } from "../types/chat";
-import { LOGIN_ID_STORAGE_KEY } from "../constants";
 import { useChatSocket } from "./useChatSocket";
 import { useWindowFocus } from "./useWindowFocus";
 import { MAX_ATTACHMENTS_PER_SEND, uploadAttachment } from "../utils/attachment";
@@ -29,7 +28,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
   });
   const busMessages = ref<ChatMessage[]>([]);
   const busUserNo = ref<number | null>(null);
-  const busNickname = ref(localStorage.getItem(LOGIN_ID_STORAGE_KEY) ?? "");
+  const busNickname = ref("");
   const busMembers = ref<ChatUser[]>([]);
   const busUsers = ref<ChatUser[]>([]);
   const busRoomName = ref("");
@@ -41,6 +40,8 @@ export function useChatRoom(roomId: { readonly value: number }) {
   const busLoadingNewer = ref(false);
   const busSearch = ref<RoomSearchState | null>(null);
   const linked = ref(false);
+  // 메인 창 연결 대기 중 (LINK_TIMEOUT_MS 안에 연결되지 않으면 false)
+  const linkPending = ref(true);
   let bus: (ChatBus & { add: (b: ChatBus | null) => void }) | null = null;
   let busClosed = false;
   let linkTimer: ReturnType<typeof setTimeout> | null = null;
@@ -259,7 +260,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
   const hasSession: ComputedRef<boolean> = computed(() =>
     direct.value
       ? store.loginId.value.trim() !== ""
-      : linked.value || busNickname.value.trim() !== "",
+      : linked.value || busNickname.value.trim() !== "" || linkPending.value,
   );
 
   const handleUnload = () => {
@@ -315,6 +316,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
     }, 800);
     linkTimer = setTimeout(() => {
       if (!linked.value) {
+        linkPending.value = false;
         busConnectionStatus.value =
           "메인 창에 연결할 수 없습니다. 메인 창에서 입장한 뒤 다시 열어주세요.";
       }

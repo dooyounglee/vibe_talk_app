@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeWebSocket, installFakeWebSocket } from "../../test/fakeWebSocket";
-import { LOGIN_ID_STORAGE_KEY, MY_STATUS_STORAGE_KEY } from "../../constants";
 
 // 상태가 모듈 전역 싱글턴이라 테스트마다 모듈을 새로 불러와 격리한다.
 type Store = ReturnType<(typeof import("../useChatSocket"))["useChatSocket"]>;
@@ -50,7 +49,6 @@ describe("connect / join", () => {
   it("open되면 join을 보내고 연결 상태가 된다", async () => {
     const store = await loadStore();
     expect(store.connect("  chulsoo  ")).toBe(true);
-    expect(localStorage.getItem(LOGIN_ID_STORAGE_KEY)).toBe("chulsoo");
     expect(store.connectionStatus.value).toBe("연결 중...");
     const ws = FakeWebSocket.last;
     expect(ws.url).toBe("ws://localhost:8080");
@@ -557,19 +555,20 @@ describe("1:1 방 찾기", () => {
   });
 });
 
-describe("내 상태 저장", () => {
-  it("저장된 값을 불러오고, 손상된 값이면 기본값을 쓴다", async () => {
-    localStorage.setItem(MY_STATUS_STORAGE_KEY, "away");
-    expect((await loadStore()).myStatus.value).toBe("away");
-    localStorage.setItem(MY_STATUS_STORAGE_KEY, "garbage");
-    expect((await loadStore()).myStatus.value).toBe("online");
+describe("내 상태", () => {
+  it("기본값은 접속(online)이고, 다시 접속하면 기본값으로 돌아간다", async () => {
+    const { store } = await connectedStore();
+    expect(store.myStatus.value).toBe("online");
+    store.setMyStatus("away");
+    store.connect("chulsoo");
+    expect(store.myStatus.value).toBe("online");
   });
 
-  it("setMyStatus는 저장하고 서버에 status_set을 보낸다", async () => {
+  it("setMyStatus는 브라우저에 저장하지 않고 서버에 status_set을 보낸다", async () => {
     const { store, ws } = await connectedStore();
     store.setMyStatus("meeting");
     expect(store.myStatus.value).toBe("meeting");
-    expect(localStorage.getItem(MY_STATUS_STORAGE_KEY)).toBe("meeting");
+    expect(localStorage.length).toBe(0);
     expect(ws.sentJson()).toEqual([{ type: "status_set", status: "meeting" }]);
     // 본인 상태는 서버 방송값이 아니라 내 값을 쓴다
     expect(store.statusTextOf(10)).toBe("회의중(📝)");

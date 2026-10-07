@@ -107,7 +107,7 @@ export interface RoomInfo {
 
 // ─── 내 상태 (접속/오프라인/회의중/바쁨/자리비움) ───
 // 메인 화면 상단 드롭다운에서 고른다.
-// status_set으로 서버에 전파되어 다른 사용자에게도 보이고, 이 브라우저에도 저장된다.
+// status_set으로 서버에 전파되어 다른 사용자에게도 보인다. 브라우저에는 저장하지 않는다.
 export type MyStatus = "online" | "offline" | "meeting" | "busy" | "away";
 
 export const DEFAULT_MY_STATUS: MyStatus = "online";
@@ -122,8 +122,8 @@ export const MY_STATUS_OPTIONS: ReadonlyArray<{ value: MyStatus; label: string }
 ];
 
 /**
- * 저장된 값을 유효한 상태로 정규화한다.
- * localStorage에는 문자열이 들어오므로(또는 예전 값/손상 값일 수 있으므로)
+ * 들어온 값을 유효한 상태로 정규화한다.
+ * select 이벤트나 서버 값은 문자열이므로(또는 예전 값/손상 값일 수 있으므로)
  * 목록에 없는 값이면 기본값으로 되돌린다. 덕분에 select에 없는 값이 선택되는 일이 없다.
  */
 export function normalizeMyStatus(value: unknown): MyStatus {
