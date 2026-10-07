@@ -6,16 +6,21 @@ const props = defineProps<{
   connectionStatus: string;
   isConnected: boolean;
   joinError: string;
+  /** 입장 거부(join_failed)된 아이디. 이 화면이 다시 마운트돼도 사용자가 입력한 아이디를 되살린다 */
+  failedLoginId?: string;
 }>();
 
 const emit = defineEmits<{
   (e: "submit", loginId: string, password: string): void;
 }>();
 
-// 저장된 아이디/비밀번호가 있으면 미리 채운다
+// 저장된 아이디/비밀번호가 있으면 미리 채운다.
+// 단, 입장이 거부돼 돌아온 경우에는 방금 입력한 아이디를 되살리고 비밀번호는 비운다
+// (저장된 비밀번호도 방금 거부된 값이라 다시 채우면 안 된다).
 const saved = loadSavedLogin();
-const loginInput = ref(saved?.loginId ?? "");
-const passwordInput = ref(saved?.password ?? "");
+const retryLoginId = props.failedLoginId?.trim() ?? "";
+const loginInput = ref(retryLoginId || (saved?.loginId ?? ""));
+const passwordInput = ref(retryLoginId ? "" : (saved?.password ?? ""));
 const savePassword = ref(saved != null);
 const autoLogin = ref(saved != null && isAutoLogin());
 const error = ref("");
@@ -28,11 +33,14 @@ watch(savePassword, (on) => {
   if (!on) autoLogin.value = false;
 });
 
+// immediate: 입장 거부(join_failed) 시 메인 화면에서 이 화면으로 다시 마운트되는데,
+// 그때는 joinError가 이미 설정된 뒤라 변경 감지만으로는 사유를 놓친다.
 watch(
   () => props.joinError,
   (msg) => {
     if (msg) error.value = msg;
-  }
+  },
+  { immediate: true }
 );
 
 const LOGIN_ID_RE = /^[A-Za-z0-9]{1,20}$/;

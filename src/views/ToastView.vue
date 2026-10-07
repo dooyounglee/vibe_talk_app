@@ -4,6 +4,8 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   TOAST_OPEN_ROOM_EVENT,
+  TOAST_PING_EVENT,
+  TOAST_READY_EVENT,
   TOAST_SHOW_EVENT,
   type MessageToastPayload,
 } from "../utils/toastWindow";
@@ -20,6 +22,7 @@ let hideTimer: ReturnType<typeof setTimeout> | null = null;
 let windowHideTimer: ReturnType<typeof setTimeout> | null = null;
 let hovering = false;
 let unlisten: (() => void) | null = null;
+let unlistenPing: (() => void) | null = null;
 let unmounted = false;
 
 const clearTimers = () => {
@@ -81,10 +84,20 @@ onMounted(() => {
   // 투명 창이므로 페이지 배경도 투명하게 둔다
   document.documentElement.style.background = "transparent";
   document.body.style.background = "transparent";
+  const announceReady = () => void emit(TOAST_READY_EVENT).catch(() => undefined);
   void listen<MessageToastPayload>(TOAST_SHOW_EVENT, (event) => onShow(event.payload))
     .then((fn) => {
-      if (unmounted) fn();
-      else unlisten = fn;
+      if (unmounted) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+      // toast-show를 들을 수 있게 된 뒤에야 메인 창에 준비됐다고 알린다 (그 전에 온 알림은 유실되므로)
+      announceReady();
+      return listen(TOAST_PING_EVENT, announceReady).then((off) => {
+        if (unmounted) off();
+        else unlistenPing = off;
+      });
     })
     .catch(() => undefined);
 });
@@ -94,6 +107,8 @@ onUnmounted(() => {
   clearTimers();
   unlisten?.();
   unlisten = null;
+  unlistenPing?.();
+  unlistenPing = null;
 });
 </script>
 

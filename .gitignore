@@ -29,3 +29,8 @@ coverage
 # e2e: downloaded msedgedriver
 e2e/bin
 e2e/node_modules
+
+# e2e coverage (npm run test:e2e:coverage)
+e2e/.nyc_output
+e2e/.v8-coverage
+coverage-e2e

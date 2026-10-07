@@ -82,6 +82,18 @@ describe("connect / join", () => {
     expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
   });
 
+  it("join_failed 뒤에는 같은 아이디/비밀번호로 재연결하지 않는다", async () => {
+    const store = await loadStore();
+    store.connect("ghost", "wrongpw1");
+    const ws = FakeWebSocket.last;
+    ws.open();
+    vi.useFakeTimers();
+    ws.receive({ type: "join_failed", text: "아이디 또는 비밀번호가 올바르지 않습니다." });
+    vi.advanceTimersByTime(10_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(store.connectionStatus.value).toBe("입장 거부됨");
+  });
+
   it("잘못된 JSON이 와도 죽지 않는다", async () => {
     const { ws } = await connectedStore();
     expect(() => ws.receive("{not json")).not.toThrow();
@@ -396,6 +408,14 @@ describe("보내는 액션", () => {
     expect(store.upsertUser("newbie", "신입", false, "010", "홍길동", 3)).toBe(true);
     expect(ws.sentJson()).toEqual([
       { type: "user_upsert", loginId: "newbie", nickname: "신입", isDeleted: false, phone: "010", userName: "홍길동", deptNo: 3 },
+    ]);
+  });
+
+  it("upsertUser: 추가/수정 구분(mode)을 함께 보낸다", async () => {
+    const { store, ws } = await connectedStore(1, "admin");
+    expect(store.upsertUser("newbie", "신입", false, "010-1234-5678", null, null, "create")).toBe(true);
+    expect(ws.sentJson()).toEqual([
+      { type: "user_upsert", loginId: "newbie", nickname: "신입", isDeleted: false, phone: "010-1234-5678", userName: null, deptNo: null, mode: "create" },
     ]);
   });
 });

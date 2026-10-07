@@ -440,6 +440,25 @@ describe("NicknameView", () => {
     expect(wrapper.get("button").attributes("disabled")).toBeDefined();
   });
 
+  it("입장 거부로 다시 열리면 입력했던 아이디를 되살리고 비밀번호는 비운다", () => {
+    // 저장된 값은 방금 거부된 시도로 덮어쓰인 것
+    localStorage.setItem(SAVED_LOGIN_STORAGE_KEY, JSON.stringify({ loginId: "kim", password: "wrongpw1" }));
+    const wrapper = mount(NicknameView, {
+      props: { ...props, joinError: "아이디 또는 비밀번호가 올바르지 않습니다.", failedLoginId: "kim" },
+    });
+    expect((wrapper.get(".nickname-input").element as HTMLInputElement).value).toBe("kim");
+    expect((wrapper.get(".password-input").element as HTMLInputElement).value).toBe("");
+    expect((wrapper.get(".save-password").element as HTMLInputElement).checked).toBe(true);
+    expect(wrapper.get(".error").text()).toBe("아이디 또는 비밀번호가 올바르지 않습니다.");
+  });
+
+  it("저장된 것과 다른 아이디로 거부돼도 입력했던 아이디를 보여준다", () => {
+    localStorage.setItem(SAVED_LOGIN_STORAGE_KEY, JSON.stringify({ loginId: "kim", password: "pw" }));
+    const wrapper = mount(NicknameView, { props: { ...props, joinError: "탈퇴한 사용자입니다", failedLoginId: "lee" } });
+    expect((wrapper.get(".nickname-input").element as HTMLInputElement).value).toBe("lee");
+    expect((wrapper.get(".password-input").element as HTMLInputElement).value).toBe("");
+  });
+
   it("서버 join 오류와 연결 상태를 표시한다", async () => {
     const wrapper = mount(NicknameView, { props });
     expect(wrapper.find(".status").exists()).toBe(false);

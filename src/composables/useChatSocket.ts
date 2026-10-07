@@ -473,12 +473,23 @@ const handleIncoming = (raw: string) => {
     // 미등록/탈퇴 사용자 입장 거부 — 닉네임 화면에 사유 표시
     joinError.value = String(data.text || "입장할 수 없습니다");
     connectionStatus.value = "입장 거부됨";
-    try {
-      ws?.close();
-    } catch {
-      // 무시
+    // 거부된 연결이므로 재접속하지 않는다. (onclose가 재접속을 예약하면 같은 아이디/비밀번호로 계속 거부된다)
+    isManuallyDisconnected.value = true;
+    if (reconnectTimer.value) {
+      clearTimeout(reconnectTimer.value);
+      reconnectTimer.value = null;
     }
+    const rejected = ws;
     ws = null;
+    if (rejected) {
+      rejected.onclose = null;
+      rejected.onerror = null;
+      try {
+        rejected.close();
+      } catch {
+        // 무시
+      }
+    }
     isConnected.value = false;
   } else if (data.type === "user_upsert_result") {
     if (data.ok) {
@@ -1175,6 +1186,8 @@ const upsertUser = (
   phone?: string | null,
   userName?: string | null,
   deptNo?: number | null,
+  // create: 이미 있는 아이디면 거부 / edit: 없는 아이디면 거부 / 생략: 있으면 수정, 없으면 추가
+  mode?: "create" | "edit",
 ): boolean => {
   if (!isAdmin()) return false;
   const id = targetLoginId.trim();
@@ -1194,6 +1207,7 @@ const upsertUser = (
       phone: phone ?? null,
       userName: userName ?? null,
       deptNo: deptNo ?? null,
+      ...(mode ? { mode } : {}),
     })
   );
   return true;

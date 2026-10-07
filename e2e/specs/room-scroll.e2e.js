@@ -1,64 +1,15 @@
 // 실제 Tauri 앱에서 채팅방 "이전 대화 더보기"(위로 무한스크롤)를 검증한다.
 // 서버는 wdio.conf.js가 임시 DB로 띄운다. 테스트 데이터는 Node의 WebSocket 클라이언트로 서버에 직접 넣는다.
-//   - admin이 bob을 등록하고 둘이 있는 방을 만든 뒤 메시지 100건(seed-0 ~ seed-99)을 보낸다.
+//   - admin이 scrollbob을 등록하고 둘이 있는 방을 만든 뒤 메시지 100건(seed-0 ~ seed-99)을 보낸다.
 //   - 앱은 admin으로 로그인해 같은 창(#/room/:id)에서 그 방을 연다.
 // E2E_SHOT_DIR 환경변수를 주면 단계별 스크린샷을 그 폴더에 남긴다.
-import fs from "node:fs";
-import path from "node:path";
+import { loginAs, openRoomHere, shot } from "../helpers/app.js";
+import { connectClient, createRoom, registerUser } from "../helpers/server.js";
 
-const WS_URL = "ws://localhost:8080";
 const SEED_COUNT = 100;
 const PAGE_SIZE = 30;
-
-// 테스트 사용자 전화번호 고정 → 초기 비밀번호 = 아이디 + '1234' (admin은 'admin').
-// 신규 계정은 첫 로그인에 비밀번호 변경이 강제되므로 '<아이디>Pass99'로 바꾸고 이후엔 그 값을 쓴다.
-const TEST_PHONE = "010-0000-1234";
-const passwords = new Map([["admin", "admin"]]);
-const currentPassword = (loginId) => passwords.get(loginId) ?? `${loginId}1234`;
-
-/** 서버에 붙는 테스트용 클라이언트 (Node 22+ 내장 WebSocket) */
-const connectClient = (loginId) =>
-  new Promise((resolve, reject) => {
-    const ws = new WebSocket(WS_URL);
-    const inbox = [];
-    const waitFor = (pred, timeout = 10_000) =>
-      new Promise((res, rej) => {
-        const start = Date.now();
-        const iv = setInterval(() => {
-          const hit = inbox.find(pred);
-          if (hit) {
-            clearInterval(iv);
-            res(hit);
-          } else if (Date.now() - start > timeout) {
-            clearInterval(iv);
-            rej(new Error(`${loginId}: 서버 응답 타임아웃`));
-          }
-        }, 20);
-      });
-    ws.addEventListener("message", (e) => {
-      try {
-        const m = JSON.parse(String(e.data));
-        inbox.push(m);
-        if (m.type === "password_change_required") {
-          const next = `${loginId}Pass99`;
-          ws.send(JSON.stringify({ type: "password_change", currentPassword: currentPassword(loginId), newPassword: next }));
-          passwords.set(loginId, next);
-        }
-      } catch {
-        // 무시
-      }
-    });
-    ws.addEventListener("error", () => reject(new Error(`${loginId}: 서버 연결 실패`)));
-    ws.addEventListener("open", async () => {
-      ws.send(JSON.stringify({ type: "join", loginId, password: currentPassword(loginId) }));
-      try {
-        await waitFor((m) => m.type === "join_ok");
-        resolve({ inbox, waitFor, send: (o) => ws.send(JSON.stringify(o)), close: () => ws.close() });
-      } catch (err) {
-        reject(err);
-      }
-    });
-  });
+// 다른 spec과 같은 서버(DB)를 공유하므로 이 spec 전용 아이디를 쓴다
+const BOB = "scrollbob";
 
 /** 채팅창 스크롤 상태 + 화면에 그려진 seed 번호들 */
 const readChat = () =>
@@ -95,13 +46,6 @@ const anchorOffset = (anchorText) =>
     return row ? row.getBoundingClientRect().top - body.getBoundingClientRect().top : null;
   }, anchorText);
 
-const shot = async (name) => {
-  const dir = process.env.E2E_SHOT_DIR;
-  if (!dir) return;
-  fs.mkdirSync(dir, { recursive: true });
-  await browser.saveScreenshot(path.join(dir, `${name}.png`));
-};
-
 describe("채팅방 이전 대화 더보기 (위로 무한스크롤)", () => {
   let roomId = 0;
   let bob = null;
@@ -109,40 +53,24 @@ describe("채팅방 이전 대화 더보기 (위로 무한스크롤)", () => {
   before(async () => {
     // ─── 테스트 데이터: bob 등록 → admin+bob 방 → 메시지 100건 ───
     const admin = await connectClient("admin");
-    admin.send({ type: "user_upsert", loginId: "bob", nickname: "bob", phone: TEST_PHONE, isDeleted: false });
-    const reg = await admin.waitFor((m) => m.type === "user_upsert_result");
-    if (!reg.ok) throw new Error("bob 등록 실패");
-    admin.send({ type: "room_create", memberNos: [reg.user_no] });
-    roomId = (await admin.waitFor((m) => m.type === "room_created")).roomId;
+    const bobNo = await registerUser(admin, BOB);
+    roomId = await createRoom(admin, [bobNo]);
     for (let i = 0; i < SEED_COUNT; i++) {
       admin.send({ type: "room_message", roomId, text: `seed-${i}` });
     }
     // 서버는 한 소켓의 메시지를 순서대로 처리하므로, 이 조회 응답이 오면 100건이 모두 저장된 뒤다
-    admin.send({ type: "room_history", roomId });
     // (방을 만들 때도 history_room 이 오므로, 마지막 메시지가 seed-99 인 응답을 기다린다)
-    await admin.waitFor(
+    await admin.request(
+      { type: "room_history", roomId },
       (m) => m.type === "history_room" && m.roomId === roomId && m.messages.at(-1)?.text === `seed-${SEED_COUNT - 1}`,
     );
     admin.close();
 
-    bob = await connectClient("bob");
+    bob = await connectClient(BOB);
 
-    // ─── 앱: 깨끗한 로그인 화면에서 admin으로 입장 ───
-    await browser.execute(() => localStorage.clear());
-    await browser.refresh();
-    // 비밀번호 칸도 nickname-input 클래스를 함께 쓰므로 아이디 칸만 고른다
-    const idInput = $(".nickname-input:not(.password-input)");
-    await idInput.waitForDisplayed({ timeout: 10_000 });
-    await idInput.setValue("admin");
-    await $(".password-input").setValue("admin");
-    await $(".start-button").click();
-    await $(".main-screen").waitForDisplayed({ timeout: 10_000 });
-
-    // 같은 창에서 방 열기 (팝업 창 대신 라우트 이동 → 소켓 직접 사용 모드)
-    await browser.execute((id) => {
-      window.location.hash = `#/room/${id}`;
-    }, roomId);
-    await $(".chat-body").waitForDisplayed({ timeout: 10_000 });
+    // ─── 앱: 깨끗한 로그인 화면에서 admin으로 입장 → 같은 창에서 방 열기 ───
+    await loginAs("admin", "admin");
+    await openRoomHere(roomId);
   });
 
   after(() => {
@@ -217,7 +145,7 @@ describe("채팅방 이전 대화 더보기 (위로 무한스크롤)", () => {
   });
 
   it("내가 보내면 맨 아래로 내려간다", async () => {
-    await $(".chat-footer input").setValue("from-me");
+    await $(".chat-footer input:not(.file-input)").setValue("from-me");
     await browser.keys("Enter");
     await browser.waitUntil(
       async () => {

@@ -34,7 +34,7 @@ const emit = defineEmits<{
   (e: "create-room-with", user: ChatUser): void;
   (e: "reconnect"): void;
   (e: "disconnect"): void;
-  (e: "upsert-user", payload: { loginId: string; nickname: string; phone: string | null; userName: string | null; isDeleted: boolean; deptNo: number | null }): void;
+  (e: "upsert-user", payload: { mode: "create" | "edit"; loginId: string; nickname: string; phone: string | null; userName: string | null; isDeleted: boolean; deptNo: number | null }): void;
   /** admin: 사용자 비밀번호 초기화. 보내지 못했으면 부모가 false 반환 */
   (e: "reset-password", userNo: number, done: (sent: boolean) => void): void;
 }>();
@@ -102,12 +102,16 @@ const onMoreClick = (e: MouseEvent, user: ChatUser) => {
   openMenu(user, rect.left, rect.bottom + 4);
 };
 
+const MENU_HEIGHT = 130; // 행 3개(1:1 채팅하기/방 만들기/상세정보) 기준 높이 여유분
+
+// 화면 밖으로 나가지 않도록 위치 보정 (목록 아래쪽 사용자의 메뉴가 창 아래로 잘리지 않게 세로도 맞춘다)
 const menuStyle = () => {
   if (!menuPos.value) return {};
   const vw = typeof globalThis.window !== "undefined" ? globalThis.window.innerWidth : 1024;
+  const vh = typeof globalThis.window !== "undefined" ? globalThis.window.innerHeight : 768;
   return {
     left: Math.min(menuPos.value.x, vw - 180) + "px",
-    top: menuPos.value.y + "px",
+    top: Math.max(8, Math.min(menuPos.value.y, vh - MENU_HEIGHT - 8)) + "px",
     position: "fixed" as const,
   };
 };
@@ -189,7 +193,9 @@ const confirmUserModal = () => {
   }
   modalError.value = "";
   const userName = editUserName.value.trim() ? editUserName.value.trim().slice(0, 30) : null;
-  emit("upsert-user", { loginId: id, nickname: nick, phone, userName, isDeleted: editIsDeleted.value, deptNo: editDeptNo.value });
+  // 추가/수정을 서버에 명시한다 (추가인데 이미 있는 아이디면 서버가 덮어쓰지 않고 거부한다)
+  const mode = editUserNo.value == null ? "create" : "edit";
+  emit("upsert-user", { mode, loginId: id, nickname: nick, phone, userName, isDeleted: editIsDeleted.value, deptNo: editDeptNo.value });
   showUserModal.value = false;
 };
 

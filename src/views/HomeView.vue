@@ -714,6 +714,7 @@ const handleConfirmInvite = (payload: { members: number[] }) => {
 
 // ─── 사용자 관리: 추가/수정 (admin 전용) ───
 const handleUpsertUser = (payload: {
+  mode: "create" | "edit";
   loginId: string;
   nickname: string;
   phone: string | null;
@@ -721,7 +722,7 @@ const handleUpsertUser = (payload: {
   isDeleted: boolean;
   deptNo: number | null;
 }) => {
-  upsertUser(payload.loginId, payload.nickname, payload.isDeleted, payload.phone, payload.userName, payload.deptNo);
+  upsertUser(payload.loginId, payload.nickname, payload.isDeleted, payload.phone, payload.userName, payload.deptNo, payload.mode);
 };
 
 // ─── 헤더 더보기(⋮) 메뉴: 내 닉네임 변경 / 나가기 ───
@@ -877,6 +878,7 @@ const visibleRooms = computed<RoomInfo[]>(() =>
     :connection-status="connectionStatus"
     :is-connected="isConnected"
     :join-error="joinError"
+    :failed-login-id="joinError ? loginId : ''"
     @submit="handleNicknameSubmit"
   />
 
