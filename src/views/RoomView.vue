@@ -127,6 +127,7 @@ const goHome = () => {
     :messages="messages"
     :connection-status="connectionStatus"
     :is-connected="isConnected"
+    :members="members"
     @send="handleSend"
     @close="handleClose"
   >

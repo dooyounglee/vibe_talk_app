@@ -25,6 +25,7 @@ import {
   type ChatBusHandler,
 } from "../chatBus";
 import { LOGIN_ID_STORAGE_KEY, MAIN_ID_STORAGE_KEY } from "../constants";
+import { isAutoLogin, setAutoLogin } from "../loginPrefs";
 
 // 이 메인 창이 유일한 WebSocket 소유자.
 // 채팅방 창(별도 윈도우)은 소켓을 만들지 않고 이벤트 버스로 상태를 받아간다.
@@ -291,8 +292,11 @@ const handleNicknameSubmit = (value: string) => {
 };
 
 // join 거부(join_failed) 시: 메인 화면으로 넘어가지 않고 닉네임 화면에 머물며 사유 표시
+// 자동로그인이 계속 거부되지 않도록 자동로그인도 끈다.
 watch(joinError, (msg) => {
-  if (msg) entered.value = false;
+  if (!msg) return;
+  entered.value = false;
+  setAutoLogin(false);
 });
 
 // 로그아웃 시 열려 있던 채팅방 창들을 모두 닫는다
@@ -339,6 +343,8 @@ const handleLeave = () => {
   }
   disconnect();
   localStorage.removeItem(LOGIN_ID_STORAGE_KEY);
+  // 직접 로그아웃했으면 다음 실행 때 자동로그인하지 않는다 (저장된 아이디/비밀번호는 유지)
+  setAutoLogin(false);
   // 열려 있던 채팅방 창들을 함께 닫는다
   closeAllRoomWindows();
   entered.value = false;
@@ -518,6 +524,7 @@ onMounted(() => {
 
   // 새로고침해도 저장된 닉네임으로 자동 입장
   // (동일 탭 라우팅 복귀 시 기존 소켓이 살아있으면 재사용)
+  // 새로 접속하는 것은 로그인 화면에서 "자동로그인"을 켠 경우에만 한다.
   // 단, window.close() 실패로 홈으로 떨어진 팝업(채팅창)에서는 자동 접속하지 않는다.
   // 자동 접속하면 같은 닉네임의 두 번째 소켓이 생기기 때문이다.
   const isPopupWindow = window.opener != null && !window.opener.closed;
@@ -526,7 +533,7 @@ onMounted(() => {
     if (saved && saved.trim() !== "") {
       if (loginId.value === saved && isConnected.value) {
         entered.value = true;
-      } else {
+      } else if (isAutoLogin()) {
         const ok = connect(saved);
         if (ok) {
           entered.value = true;
@@ -671,9 +678,46 @@ const handleUpsertUser = (payload: {
   upsertUser(payload.loginId, payload.nickname, payload.isDeleted, payload.phone, payload.userName, payload.deptNo);
 };
 
-// ─── 닉네임 변경 (본인 + admin) ───
-const handleRenameUser = (payload: { user_no: number; nickname: string }) => {
-  renameUser(payload.user_no, payload.nickname);
+// ─── 헤더 더보기(⋮) 메뉴: 내 닉네임 변경 / 나가기 ───
+const showHeaderMenu = ref(false);
+const toggleHeaderMenu = () => {
+  showHeaderMenu.value = !showHeaderMenu.value;
+};
+const closeHeaderMenu = () => {
+  showHeaderMenu.value = false;
+};
+const handleMenuLeave = () => {
+  closeHeaderMenu();
+  handleLeave();
+};
+
+// ─── 내 닉네임 변경 (본인) ───
+const showMyRenameModal = ref(false);
+const myRenameInput = ref("");
+const myRenameError = ref("");
+const openMyRenameModal = () => {
+  closeHeaderMenu();
+  myRenameInput.value = nickname.value;
+  myRenameError.value = "";
+  showMyRenameModal.value = true;
+};
+const closeMyRenameModal = () => {
+  showMyRenameModal.value = false;
+  myRenameError.value = "";
+};
+const confirmMyRenameModal = () => {
+  const nick = myRenameInput.value.trim().slice(0, 20);
+  if (!nick) {
+    myRenameError.value = "닉네임을 입력하세요.";
+    return;
+  }
+  if (myUserNo.value == null) {
+    myRenameError.value = "로그인이 필요합니다.";
+    return;
+  }
+  myRenameError.value = "";
+  renameUser(myUserNo.value, nick);
+  showMyRenameModal.value = false;
 };
 
 // 내가 만든 방이 목록에 반영되면 자동으로 새 창을 연다
@@ -747,9 +791,15 @@ const visibleRooms = computed<RoomInfo[]>(() =>
         >
           재연결
         </button>
-        <button v-if="isConnected" class="small-btn" @click="handleLeave">
-          나가기
-        </button>
+        <!-- 더보기(⋮) 메뉴: 내 닉네임 변경 / 나가기 -->
+        <div class="header-menu-wrap">
+          <button class="more-btn" title="더보기" @click.stop="toggleHeaderMenu">⋮</button>
+          <div v-if="showHeaderMenu" class="header-menu-backdrop" @click="closeHeaderMenu"></div>
+          <div v-if="showHeaderMenu" class="header-menu" @click.stop>
+            <button :disabled="!isConnected" @click="openMyRenameModal">내 닉네임 변경</button>
+            <button v-if="isConnected" @click="handleMenuLeave">나가기</button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="tab-row">
@@ -787,7 +837,6 @@ const visibleRooms = computed<RoomInfo[]>(() =>
     <UserListView
       v-else
       :my-user-no="myUserNo"
-      :my-nickname="nickname"
       :users="userlist"
       :online-users="onlineUsers"
       :user-statuses="userStatuses"
@@ -803,8 +852,27 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       @reconnect="manualReconnect"
       @disconnect="handleLeave"
       @upsert-user="handleUpsertUser"
-      @rename-user="handleRenameUser"
     />
+    <!-- 내 닉네임 변경 모달 (헤더 ⋮ 메뉴 → '내 닉네임 변경') -->
+    <div v-if="showMyRenameModal" class="modal-backdrop" @click="closeMyRenameModal">
+      <div class="modal-card" @click.stop>
+        <h3>내 닉네임 변경</h3>
+        <label class="field-label">닉네임</label>
+        <input
+          v-model="myRenameInput"
+          class="text-input"
+          placeholder="닉네임 입력"
+          maxlength="20"
+          @keyup.enter="confirmMyRenameModal"
+        />
+        <p v-if="myRenameError" class="error">{{ myRenameError }}</p>
+        <div class="modal-actions">
+          <button class="small-btn" @click="closeMyRenameModal">취소</button>
+          <button class="small-btn primary" @click="confirmMyRenameModal">저장</button>
+        </div>
+      </div>
+    </div>
+    <p v-if="userRenameResult && mainTab !== 'users'" class="rename-result">{{ userRenameResult }}</p>
     <!-- 방 만들기 팝업: 사용자 1명 이상 체크 후 확인 (방 이름은 자동 생성) -->
     <CreateRoomModal
       v-if="showCreateModal"
@@ -900,6 +968,76 @@ const visibleRooms = computed<RoomInfo[]>(() =>
   background: #fff; cursor: pointer;
 }
 .small-btn.primary { background: #007bff; color: #fff; border-color: #007bff; }
+/* 헤더 더보기(⋮) 메뉴 */
+.header-menu-wrap { position: relative; }
+.more-btn {
+  border: 1px solid #ddd;
+  background: #fff;
+  border-radius: 6px;
+  width: 30px;
+  height: 30px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: #555;
+}
+.more-btn:hover { background: #f0f0f0; }
+.header-menu-backdrop { position: fixed; inset: 0; z-index: 999; }
+.header-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  overflow: hidden;
+}
+.header-menu button {
+  padding: 10px 14px;
+  font-size: 14px;
+  border: none;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+.header-menu button:hover:not(:disabled) { background: #f2f7ff; }
+.header-menu button:disabled { color: #aaa; cursor: default; }
+.header-menu button + button { border-top: 1px solid #eee; }
+/* 내 닉네임 변경 모달 */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+.modal-card {
+  width: 300px;
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+.modal-card h3 { margin: 0 0 12px; font-size: 16px; }
+.field-label { display: block; font-size: 13px; color: #555; margin: 8px 0 4px; }
+.text-input {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 14px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+.error { color: #d33; font-size: 13px; margin: 8px 0 0; }
+.rename-result { color: #d33; font-size: 13px; margin: 0; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .tab-row { display: flex; gap: 8px; }
 .tab-row button {
   flex: 1; padding: 10px; font-size: 14px;

@@ -7,6 +7,7 @@ import RenameRoomModal from "../RenameRoomModal.vue";
 import CloseConfirmModal from "../CloseConfirmModal.vue";
 import UserSearchInput from "../UserSearchInput.vue";
 import NicknameView from "../NicknameView.vue";
+import { AUTO_LOGIN_STORAGE_KEY, SAVED_LOGIN_STORAGE_KEY } from "../../constants";
 import { ROOM_TITLE_INPUT_MAX_LENGTH, type ChatUser } from "../../types/chat";
 
 /** 배열의 마지막 원소 (tsconfig lib이 ES2020이라 Array.prototype.at을 쓰지 않는다) */
@@ -156,8 +157,49 @@ describe("NicknameView", () => {
   it("올바른 아이디면 다듬어서 submit한다", async () => {
     const wrapper = mount(NicknameView, { props });
     await wrapper.get("input").setValue("  chulsoo1 ");
+    await wrapper.get(".password-input").setValue("pw1234");
     await wrapper.get("button").trigger("click");
     expect(wrapper.emitted("submit")).toEqual([["chulsoo1"]]);
+    // 체크하지 않았으면 아무것도 저장하지 않는다
+    expect(localStorage.getItem(SAVED_LOGIN_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(AUTO_LOGIN_STORAGE_KEY)).toBeNull();
+  });
+
+  it("비밀번호가 비어 있으면 버튼이 비활성화된다", async () => {
+    const wrapper = mount(NicknameView, { props });
+    await wrapper.get("input").setValue("chulsoo1");
+    expect(wrapper.get("button").attributes("disabled")).toBeDefined();
+  });
+
+  it("자동로그인을 켜면 비밀번호 저장도 켜지고, 로그인 시 둘 다 저장한다", async () => {
+    const wrapper = mount(NicknameView, { props });
+    await wrapper.get("input").setValue("chulsoo1");
+    await wrapper.get(".password-input").setValue("pw1234");
+    await wrapper.get(".auto-login").setValue(true);
+    expect((wrapper.get(".save-password").element as HTMLInputElement).checked).toBe(true);
+    await wrapper.get("button").trigger("click");
+    expect(JSON.parse(localStorage.getItem(SAVED_LOGIN_STORAGE_KEY)!)).toEqual({
+      loginId: "chulsoo1",
+      password: "pw1234",
+    });
+    expect(localStorage.getItem(AUTO_LOGIN_STORAGE_KEY)).toBe("1");
+  });
+
+  it("비밀번호 저장을 끄면 자동로그인도 꺼진다", async () => {
+    const wrapper = mount(NicknameView, { props });
+    await wrapper.get(".auto-login").setValue(true);
+    await wrapper.get(".save-password").setValue(false);
+    expect((wrapper.get(".auto-login").element as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("저장된 아이디/비밀번호와 체크 상태를 불러온다", () => {
+    localStorage.setItem(SAVED_LOGIN_STORAGE_KEY, JSON.stringify({ loginId: "kim", password: "pw" }));
+    localStorage.setItem(AUTO_LOGIN_STORAGE_KEY, "1");
+    const wrapper = mount(NicknameView, { props });
+    expect((wrapper.get(".nickname-input").element as HTMLInputElement).value).toBe("kim");
+    expect((wrapper.get(".password-input").element as HTMLInputElement).value).toBe("pw");
+    expect((wrapper.get(".save-password").element as HTMLInputElement).checked).toBe(true);
+    expect((wrapper.get(".auto-login").element as HTMLInputElement).checked).toBe(true);
   });
 
   it("영문+숫자가 아니면 오류를 보여준다", async () => {

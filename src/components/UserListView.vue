@@ -7,7 +7,6 @@ import UserSearchInput from "./UserSearchInput.vue";
 
 const props = defineProps<{
   myUserNo: number | null;
-  myNickname: string;
   users: ChatUser[];
   onlineUsers: number[];
   /** 서버가 방송한 사용자별 상태 (user_no → 상태) */
@@ -28,7 +27,6 @@ const emit = defineEmits<{
   (e: "reconnect"): void;
   (e: "disconnect"): void;
   (e: "upsert-user", payload: { loginId: string; nickname: string; phone: string | null; userName: string | null; isDeleted: boolean; deptNo: number | null }): void;
-  (e: "rename-user", payload: { user_no: number; nickname: string }): void;
 }>();
 
 // admin에게 보여줄 목록: 탈퇴 포함 전체, 일반 사용자는 users 그대로
@@ -191,36 +189,13 @@ const closeDetailModal = () => {
   detailUser.value = null;
 };
 
-// 내 닉네임 변경 (본인)
-const showRenameModal = ref(false);
-const renameInput = ref("");
-const renameError = ref("");
-const openRenameModal = () => {
-  renameInput.value = props.myNickname;
-  renameError.value = "";
-  showRenameModal.value = true;
-};
-const confirmRenameModal = () => {
-  const nick = renameInput.value.trim().slice(0, 20);
-  if (!nick) {
-    renameError.value = "닉네임을 입력하세요.";
-    return;
-  }
-  if (props.myUserNo == null) {
-    renameError.value = "로그인이 필요합니다.";
-    return;
-  }
-  renameError.value = "";
-  emit("rename-user", { user_no: props.myUserNo, nickname: nick });
-  showRenameModal.value = false;
-};
+// NOTE: '내 닉네임 변경'은 메인 헤더(HomeView)의 ⋮ 메뉴로 옮겨졌다.
 </script>
 
 <template>
   <div class="userlist-screen" @click="closeMenu">
     <h2 class="list-title">사용자 목록 ({{ sortedUsers.length }}명)
       <span class="title-btns">
-        <button class="small-btn" @click="openRenameModal">내 닉네임 변경</button>
         <button v-if="isAdmin" class="small-btn primary add-btn" @click="openAddModal">추가</button>
       </span>
     </h2>
@@ -374,26 +349,6 @@ const confirmRenameModal = () => {
           <button class="small-btn primary" @click="confirmUserModal">
             {{ editMode === 'add' ? '추가' : '저장' }}
           </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 내 닉네임 변경 모달 (본인) -->
-    <div v-if="showRenameModal" class="modal-backdrop" @click="showRenameModal = false">
-      <div class="modal-card" @click.stop>
-        <h3>내 닉네임 변경</h3>
-        <label class="field-label">닉네임</label>
-        <input
-          v-model="renameInput"
-          class="text-input"
-          placeholder="닉네임 입력"
-          maxlength="20"
-          @keyup.enter="confirmRenameModal"
-        />
-        <p v-if="renameError" class="error">{{ renameError }}</p>
-        <div class="modal-actions">
-          <button class="small-btn" @click="showRenameModal = false">취소</button>
-          <button class="small-btn primary" @click="confirmRenameModal">저장</button>
         </div>
       </div>
     </div>

@@ -13,6 +13,8 @@ describe("로그인", () => {
     await expect($(".nickname-screen")).toBeDisplayed();
 
     await $(".nickname-input").setValue("admin");
+    // 서버는 아직 비밀번호를 검사하지 않는다 (화면에서만 필수 입력)
+    await $(".password-input").setValue("admin");
     await $(".start-button").click();
 
     await $(".main-screen").waitForDisplayed({ timeout: 10_000 });

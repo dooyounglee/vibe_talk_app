@@ -1,15 +1,21 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref, watch } from "vue";
-import type { ChatMessage } from "../types/chat";
+import type { ChatMessage, ChatUser } from "../types/chat";
+import RoomMembersModal from "./RoomMembersModal.vue";
 
-const props = defineProps<{
-  peer: string;
-  myUserNo: number | null;
-  myNickname: string;
-  messages: ChatMessage[];
-  connectionStatus: string;
-  isConnected: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    peer: string;
+    myUserNo: number | null;
+    myNickname: string;
+    messages: ChatMessage[];
+    connectionStatus: string;
+    isConnected: boolean;
+    /** 현재 채팅방 참여자 (상단 '참여자' 버튼 모달에 표시) */
+    members?: ChatUser[];
+  }>(),
+  { members: () => [] },
+);
 
 const emit = defineEmits<{
   (e: "send", text: string): void;
@@ -17,6 +23,8 @@ const emit = defineEmits<{
 }>();
 
 const draft = ref("");
+// 상단 '참여자' 버튼 → 참여자 목록 모달
+const showMembersModal = ref(false);
 const bodyRef = ref<HTMLDivElement | null>(null);
 
 const scrollToBottom = async () => {
@@ -54,6 +62,11 @@ watch(
         <span class="peer">{{ peer }}님과의 1:1 채팅</span>
         <span class="header-actions">
           <!-- 채팅방 상단 연필 등, 창마다 다른 액션 슬롯 -->
+          <button
+            class="members-btn"
+            title="참여자 목록"
+            @click="showMembersModal = true"
+          >👥 {{ members.length }}</button>
           <slot name="header-actions" />
           <button class="close-btn" @click="$emit('close')">✕</button>
         </span>
@@ -103,6 +116,13 @@ watch(
       </div>
     </div>
   </div>
+
+  <RoomMembersModal
+    v-if="showMembersModal"
+    :members="members"
+    :my-user-no="myUserNo"
+    @close="showMembersModal = false"
+  />
 </template>
 
 <style scoped>
@@ -136,6 +156,19 @@ watch(
   font-size: 16px;
   cursor: pointer;
 }
+/* 상단 참여자 버튼 (👥 인원수) */
+.members-btn {
+  border: none;
+  background: transparent;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+  opacity: 0.9;
+}
+.members-btn:hover { background: rgba(255, 255, 255, 0.2); opacity: 1; }
 /* 헤더 우측 액션 영역 (슬롯 + 닫기 버튼) */
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .conn-banner {
