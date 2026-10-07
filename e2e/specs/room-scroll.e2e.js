@@ -38,7 +38,7 @@ const connectClient = (loginId) =>
     });
     ws.addEventListener("error", () => reject(new Error(`${loginId}: 서버 연결 실패`)));
     ws.addEventListener("open", async () => {
-      ws.send(JSON.stringify({ type: "join", loginId }));
+      ws.send(JSON.stringify({ type: "join", loginId, password: loginId }));
       try {
         await waitFor((m) => m.type === "join_ok");
         resolve({ inbox, waitFor, send: (o) => ws.send(JSON.stringify(o)), close: () => ws.close() });

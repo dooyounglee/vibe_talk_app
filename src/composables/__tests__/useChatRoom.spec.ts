@@ -223,7 +223,7 @@ describe("useChatRoom — 새 창 (버스 모드)", () => {
 
 describe("useChatRoom — 같은 탭 (소켓 직접 사용)", () => {
   const login = (store: Store) => {
-    store.connect("chulsoo");
+    store.connect("chulsoo", "pw1234");
     FakeWebSocket.last.open();
     FakeWebSocket.last.receive({ type: "join_ok", user_no: 10, nickname: "철수" });
   };

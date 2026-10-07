@@ -6,6 +6,7 @@ import type { UserDetail } from "../composables/useChatSocket";
 import UserSearchInput from "./UserSearchInput.vue";
 import ProfileAvatar from "./ProfileAvatar.vue";
 import UserDetailModal, { type UserDetailInfo } from "./UserDetailModal.vue";
+import PasswordResetModal from "./PasswordResetModal.vue";
 
 const props = defineProps<{
   myUserNo: number | null;
@@ -23,6 +24,8 @@ const props = defineProps<{
   depts: Department[];
   upsertResult: string;
   renameResult: string;
+  /** password_change / password_reset 결과 (비번초기화 모달용) */
+  passwordResult: { seq: number; ok: boolean; kind: "change" | "reset"; text: string } | null;
 }>();
 
 const emit = defineEmits<{
@@ -31,6 +34,8 @@ const emit = defineEmits<{
   (e: "reconnect"): void;
   (e: "disconnect"): void;
   (e: "upsert-user", payload: { loginId: string; nickname: string; phone: string | null; userName: string | null; isDeleted: boolean; deptNo: number | null }): void;
+  /** admin: 사용자 비밀번호 초기화. 보내지 못했으면 부모가 false 반환 */
+  (e: "reset-password", userNo: number, done: (sent: boolean) => void): void;
 }>();
 
 // admin에게 보여줄 목록: 본인·탈퇴 포함 DB 전체, 일반 사용자는 users 그대로 (서버가 admin 제외)
@@ -116,11 +121,14 @@ const editUserName = ref("");
 const editIsDeleted = ref(false);
 const editDeptNo = ref<number | null>(null);
 const editMode = ref<"add" | "edit">("add");
+// 수정 대상 user_no ([초기화] 버튼용, 추가 모드에서는 null)
+const editUserNo = ref<number | null>(null);
 const modalError = ref("");
 const LOGIN_ID_RE = /^[A-Za-z0-9]{1,20}$/;
 
 const openAddModal = () => {
   editMode.value = "add";
+  editUserNo.value = null;
   editLoginId.value = "";
   editNickname.value = "";
   editPhone.value = "";
@@ -141,6 +149,7 @@ const deptOptions = computed(() =>
 
 const openEditModal = (u: { user_no: number; loginId?: string; nickname: string; phone?: string | null; userName?: string | null; isDeleted: boolean; deptNo?: number | null }) => {
   editMode.value = "edit";
+  editUserNo.value = u.user_no;
   editLoginId.value = u.loginId ?? "";
   editNickname.value = u.nickname;
   editPhone.value = u.phone ?? "";
@@ -173,6 +182,18 @@ const confirmUserModal = () => {
   const userName = editUserName.value.trim() ? editUserName.value.trim().slice(0, 30) : null;
   emit("upsert-user", { loginId: id, nickname: nick, phone, userName, isDeleted: editIsDeleted.value, deptNo: editDeptNo.value });
   showUserModal.value = false;
+};
+
+// ─── 비밀번호 초기화 (admin, [사용자 수정] 모달 → [초기화]) ───
+// 아이디 + 전화번호 뒤 4자리. 전화번호는 저장된 값 기준이므로 수정 중인 입력값과 다를 수 있다.
+const showPasswordResetModal = ref(false);
+const openPasswordResetModal = () => {
+  if (editUserNo.value == null) return;
+  showPasswordResetModal.value = true;
+};
+const confirmPasswordReset = (done: (sent: boolean) => void) => {
+  if (editUserNo.value == null) return done(false);
+  emit("reset-password", editUserNo.value, done);
 };
 
 // ─── 사용자 상세정보 모달 (더보기 메뉴 → '상세정보') ───
@@ -336,6 +357,10 @@ const closeDetailModal = () => {
           <input type="checkbox" v-model="editIsDeleted" />
           탈퇴여부 (체크 = 탈퇴)
         </label>
+        <div v-if="editMode === 'edit'" class="password-row">
+          <span class="field-label">비밀번호</span>
+          <button class="small-btn reset-password-btn" :disabled="!isConnected" @click="openPasswordResetModal">초기화</button>
+        </div>
         <p v-if="modalError" class="error">{{ modalError }}</p>
         <div class="modal-actions">
           <button class="small-btn" @click="closeUserModal">취소</button>
@@ -345,6 +370,15 @@ const closeDetailModal = () => {
         </div>
       </div>
     </div>
+    <PasswordResetModal
+      v-if="showPasswordResetModal"
+      :login-id="editLoginId"
+      :self="editUserNo === myUserNo"
+      :is-connected="isConnected"
+      :result="passwordResult"
+      @confirm="confirmPasswordReset"
+      @close="showPasswordResetModal = false"
+    />
   </div>
 </template>
 
@@ -523,6 +557,8 @@ const closeDetailModal = () => {
   box-sizing: border-box;
 }
 .text-input:disabled { background: #f1f3f5; color: #555; }
+.password-row { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+.password-row .field-label { margin: 0; }
 .check-row { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-top: 12px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 </style>

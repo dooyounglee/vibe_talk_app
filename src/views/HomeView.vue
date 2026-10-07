@@ -15,6 +15,8 @@ import RenameRoomModal from "../components/RenameRoomModal.vue";
 import CloseConfirmModal from "../components/CloseConfirmModal.vue";
 import ProfileAvatar from "../components/ProfileAvatar.vue";
 import ProfileImageModal from "../components/ProfileImageModal.vue";
+import PasswordChangeModal from "../components/PasswordChangeModal.vue";
+import PasswordResetModal from "../components/PasswordResetModal.vue";
 import UserDetailModal, { type UserDetailInfo } from "../components/UserDetailModal.vue";
 import { openImageWindow } from "../utils/imageWindow";
 import { useChatSocket } from "../composables/useChatSocket";
@@ -89,6 +91,9 @@ const {
   myProfileImage,
   profileImageResult,
   setProfileImage,
+  passwordResult,
+  changePassword,
+  resetPassword,
 } = useChatSocket();
 
 const router = useRouter();
@@ -311,9 +316,9 @@ const handleOpenChat = (user: ChatUser) => {
     });
 };
 
-const handleNicknameSubmit = (value: string) => {
-  // value = 아이디(영문+숫자). connect()가 로컬 저장까지 처리한다.
-  const ok = connect(value);
+const handleNicknameSubmit = (value: string, password: string) => {
+  // value = 아이디(영문+숫자). 비밀번호 확인은 서버 join에서 한다 (틀리면 join_failed).
+  const ok = connect(value, password);
   if (ok) {
     entered.value = true;
   }
@@ -584,7 +589,7 @@ onMounted(() => {
       entered.value = true;
     } else if (isAutoLogin()) {
       const saved = loadSavedLogin();
-      if (saved && saved.loginId.trim() !== "" && connect(saved.loginId)) {
+      if (saved && saved.loginId.trim() !== "" && connect(saved.loginId, saved.password)) {
         entered.value = true;
       }
     }
@@ -814,6 +819,29 @@ const handleApplyProfileImage = (fileId: string | null, done: (sent: boolean) =>
   done(setProfileImage(fileId));
 };
 
+// ─── 비번변경 / 비번초기화 (본인, 헤더 ⋮ 메뉴) ───
+const showPasswordChangeModal = ref(false);
+const openPasswordChangeModal = () => {
+  closeHeaderMenu();
+  showPasswordChangeModal.value = true;
+};
+const handleApplyPasswordChange = (current: string, next: string, done: (sent: boolean) => void) => {
+  done(changePassword(current, next));
+};
+const showMyPasswordResetModal = ref(false);
+const openMyPasswordResetModal = () => {
+  closeHeaderMenu();
+  showMyPasswordResetModal.value = true;
+};
+const handleConfirmMyPasswordReset = (done: (sent: boolean) => void) => {
+  done(resetPassword());
+};
+
+// admin: '사용자' 탭 [사용자 수정] 모달 → [초기화]
+const handleResetUserPassword = (userNo: number, done: (sent: boolean) => void) => {
+  done(resetPassword(userNo));
+};
+
 // 내가 만든 방이 목록에 반영되면 자동으로 새 창을 연다
 // (방 만들기 팝업에서 확인을 누른 직후 1회만 동작)
 watch(
@@ -892,7 +920,7 @@ const visibleRooms = computed<RoomInfo[]>(() =>
         >
           재연결
         </button>
-        <!-- 더보기(⋮) 메뉴: 내정보 / 내 닉네임 변경 / 프로필이미지 설정 / 나가기 -->
+        <!-- 더보기(⋮) 메뉴: 내정보 / 내 닉네임 변경 / 프로필이미지 설정 / 비번변경 / 비번초기화 / 나가기 -->
         <div class="header-menu-wrap">
           <button class="more-btn" title="더보기" @click.stop="toggleHeaderMenu">⋮</button>
           <div v-if="showHeaderMenu" class="header-menu-backdrop" @click="closeHeaderMenu"></div>
@@ -900,6 +928,8 @@ const visibleRooms = computed<RoomInfo[]>(() =>
             <button @click="openMyInfoModal">내정보</button>
             <button :disabled="!isConnected" @click="openMyRenameModal">내 닉네임 변경</button>
             <button :disabled="!isConnected" @click="openProfileImageModal">프로필이미지 설정</button>
+            <button :disabled="!isConnected" @click="openPasswordChangeModal">비번변경</button>
+            <button :disabled="!isConnected" @click="openMyPasswordResetModal">비번초기화</button>
             <button v-if="isConnected" @click="handleMenuLeave">나가기</button>
           </div>
         </div>
@@ -951,11 +981,13 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       :depts="depts"
       :upsert-result="userUpsertResult"
       :rename-result="userRenameResult"
+      :password-result="passwordResult"
       @open-chat="handleOpenChat"
       @create-room-with="handleCreateRoomWith"
       @reconnect="manualReconnect"
       @disconnect="handleLeave"
       @upsert-user="handleUpsertUser"
+      @reset-password="handleResetUserPassword"
     />
     <!-- 내 닉네임 변경 모달 (헤더 ⋮ 메뉴 → '내 닉네임 변경') -->
     <div v-if="showMyRenameModal" class="modal-backdrop" @click="closeMyRenameModal">
@@ -992,6 +1024,23 @@ const visibleRooms = computed<RoomInfo[]>(() =>
       :result="profileImageResult"
       @apply="handleApplyProfileImage"
       @cancel="closeProfileImageModal"
+    />
+    <!-- 비번변경 / 비번초기화 모달 (헤더 ⋮ 메뉴) -->
+    <PasswordChangeModal
+      v-if="showPasswordChangeModal"
+      :is-connected="isConnected"
+      :result="passwordResult"
+      @apply="handleApplyPasswordChange"
+      @close="showPasswordChangeModal = false"
+    />
+    <PasswordResetModal
+      v-if="showMyPasswordResetModal"
+      :login-id="loginId"
+      :self="true"
+      :is-connected="isConnected"
+      :result="passwordResult"
+      @confirm="handleConfirmMyPasswordReset"
+      @close="showMyPasswordResetModal = false"
     />
     <p v-if="userRenameResult && mainTab !== 'users'" class="rename-result">{{ userRenameResult }}</p>
     <!-- 방 만들기 팝업: 사용자 1명 이상 체크 후 확인 (방 이름은 자동 생성) -->

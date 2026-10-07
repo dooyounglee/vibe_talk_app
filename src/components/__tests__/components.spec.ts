@@ -388,7 +388,7 @@ describe("NicknameView", () => {
     await wrapper.get("input").setValue("  chulsoo1 ");
     await wrapper.get(".password-input").setValue("pw1234");
     await wrapper.get("button").trigger("click");
-    expect(wrapper.emitted("submit")).toEqual([["chulsoo1"]]);
+    expect(wrapper.emitted("submit")).toEqual([["chulsoo1", "pw1234"]]);
     // 체크하지 않았으면 아무것도 저장하지 않는다
     expect(localStorage.getItem(SAVED_LOGIN_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(AUTO_LOGIN_STORAGE_KEY)).toBeNull();

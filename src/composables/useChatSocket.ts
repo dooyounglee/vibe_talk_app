@@ -10,11 +10,14 @@ import {
   attachmentPreviewText,
   toChatAttachment,
 } from "../types/chat";
+import { loadSavedLogin, saveLogin } from "../loginPrefs";
 
 // ─── 모듈 싱글톤 상태 ───
 const isConnected = ref(false);
 // 로그인 ID (불변, 영문+숫자 최대20) — 서버 join 키
 const loginId = ref("");
+// 로그인 비밀번호 — 재연결 시 join에 다시 보내야 하므로 메모리에만 들고 있는다 (화면 노출 안 함)
+let loginPassword = "";
 // 내 user_no (서버 내부 키) + 표시용 닉네임
 const myUserNo = ref<number | null>(null);
 const nickname = ref("");
@@ -85,6 +88,11 @@ const userUpsertResult = ref("");
 const userRenameResult = ref("");
 // profile_image_set 결과 — seq로 매 응답을 구분해 모달이 성공/실패를 감지한다
 const profileImageResult = ref<{ seq: number; ok: boolean; text: string } | null>(null);
+// password_change / password_reset 결과 — seq로 매 응답을 구분한다
+// kind: 'change' | 'reset', self: 본인 비밀번호가 바뀌었는지
+const passwordResult = ref<{ seq: number; ok: boolean; kind: "change" | "reset"; self: boolean; text: string } | null>(null);
+// 비밀번호 변경 요청 중인 새 비밀번호 (성공 응답 시 loginPassword로 반영)
+let pendingNewPassword: string | null = null;
 const isAdmin = () => myUserNo.value === 1;
 
 // 방제목 수정 실패 사유 (RenameRoomModal에 표시). 성공하면 서버가 새 목록을 주므로 비운다.
@@ -261,6 +269,9 @@ interface IncomingPayload {
   isDeleted?: boolean;
   is_deleted?: number;
   ok?: boolean;
+  // password_reset_result: 본인 초기화 여부 + 새 비밀번호(본인일 때만)
+  self?: boolean;
+  password?: string;
   // 채팅창 열람 시 서버가 보내주는 지난 대화 내역 (history_room)
   withUser?: string;
   withUserNo?: number;
@@ -445,6 +456,28 @@ const handleIncoming = (raw: string) => {
     } else {
       userRenameResult.value = String(data.text || "닉네임 변경에 실패했습니다");
     }
+  } else if (data.type === "password_change_result" || data.type === "password_reset_result") {
+    const kind = data.type === "password_change_result" ? "change" : "reset";
+    const ok = data.ok === true;
+    let self = kind === "change";
+    if (ok) {
+      let next: string | null = null;
+      if (kind === "change") {
+        next = pendingNewPassword;
+      } else if (data.self === true && typeof data.password === "string") {
+        self = true;
+        next = data.password;
+      }
+      if (next != null) applyNewPassword(next);
+    }
+    if (kind === "change") pendingNewPassword = null;
+    passwordResult.value = {
+      seq: (passwordResult.value?.seq ?? 0) + 1,
+      ok,
+      kind,
+      self,
+      text: ok ? "" : String(data.text || (kind === "change" ? "비밀번호 변경에 실패했습니다" : "비밀번호 초기화에 실패했습니다")),
+    };
   } else if (data.type === "profile_image_result") {
     profileImageResult.value = {
       seq: (profileImageResult.value?.seq ?? 0) + 1,
@@ -1012,7 +1045,7 @@ const attemptReconnect = () => {
   // 연결 성공 시 처리
   socket.onopen = () => {
     if (loginId.value) {
-      socket.send(JSON.stringify({ type: "join", loginId: loginId.value }));
+      socket.send(JSON.stringify({ type: "join", loginId: loginId.value, password: loginPassword }));
     }
     isConnected.value = true;
     connectionStatus.value = "연결됨";
@@ -1029,7 +1062,7 @@ const attemptReconnect = () => {
 
 // 첫 화면(아이디 입력)에서 호출하는 연결 함수
 export const LOGIN_ID_RE = /^[A-Za-z0-9]{1,20}$/;
-const connect = (loginIdInput: string): boolean => {
+const connect = (loginIdInput: string, password: string): boolean => {
   const trimmed = loginIdInput.trim();
   if (!LOGIN_ID_RE.test(trimmed)) {
     joinError.value = "아이디는 영문+숫자, 최대 20자입니다.";
@@ -1038,6 +1071,7 @@ const connect = (loginIdInput: string): boolean => {
   joinError.value = "";
   const loginChanged = loginId.value !== "" && loginId.value !== trimmed;
   loginId.value = trimmed;
+  loginPassword = password;
   nickname.value = "";
   myUserNo.value = null;
   // 서버도 join 시 기본값(online)으로 되돌리므로 화면 상태를 맞춘다
@@ -1072,7 +1106,7 @@ const connect = (loginIdInput: string): boolean => {
   const socket = new WebSocket("ws://localhost:8080");
   ws = socket;
   socket.onopen = () => {
-    socket.send(JSON.stringify({ type: "join", loginId: loginId.value }));
+    socket.send(JSON.stringify({ type: "join", loginId: loginId.value, password: loginPassword }));
     isConnected.value = true;
     connectionStatus.value = "연결됨";
     if (reconnectTimer.value) {
@@ -1153,6 +1187,31 @@ const setProfileImage = (fileId: string | null): boolean => {
   ws.send(JSON.stringify({ type: "profile_image_set", fileId }));
   return true;
 };
+
+// ─── 비밀번호 변경 (본인) ───
+// 새 비밀번호 규칙(8~50자, 영문+숫자)은 서버에서도 검사한다
+export const isValidNewPassword = (v: string) => v.length >= 8 && v.length <= 50 && /[A-Za-z]/.test(v) && /\d/.test(v);
+const changePassword = (currentPassword: string, newPassword: string): boolean => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  pendingNewPassword = newPassword;
+  ws.send(JSON.stringify({ type: "password_change", currentPassword, newPassword }));
+  return true;
+};
+
+// ─── 비밀번호 초기화 (본인 + admin) ───
+// targetNo 생략 시 본인. 아이디 + 전화번호 뒤 4자리로 되돌린다.
+const resetPassword = (targetNo?: number): boolean => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify(targetNo == null ? { type: "password_reset" } : { type: "password_reset", targetUserNo: targetNo }));
+  return true;
+};
+
+// 내 비밀번호가 바뀌면 재연결용 값과 "비밀번호 저장" 값을 함께 갱신한다
+function applyNewPassword(next: string) {
+  loginPassword = next;
+  const saved = loadSavedLogin();
+  if (saved && saved.loginId === loginId.value) saveLogin({ loginId: saved.loginId, password: next });
+}
 
 // 수동 재연결 함수
 const manualReconnect = () => {
@@ -1267,5 +1326,8 @@ export function useChatSocket() {
     myProfileImage,
     profileImageResult,
     setProfileImage,
+    passwordResult,
+    changePassword,
+    resetPassword,
   };
 }

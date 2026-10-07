@@ -13,7 +13,7 @@ const loadStore = async (): Promise<Store> => {
 /** 로그인해서 open 상태 소켓까지 만들고 join_ok까지 받은 스토어 */
 const connectedStore = async (userNo = 10, nick = "철수"): Promise<{ store: Store; ws: FakeWebSocket }> => {
   const store = await loadStore();
-  store.connect("chulsoo");
+  store.connect("chulsoo", "pw1234");
   const ws = FakeWebSocket.last;
   ws.open();
   ws.receive({ type: "join_ok", user_no: userNo, nickname: nick, loginId: "chulsoo" });
@@ -41,19 +41,19 @@ describe("LOGIN_ID_RE", () => {
 describe("connect / join", () => {
   it("잘못된 아이디면 소켓을 만들지 않고 오류를 남긴다", async () => {
     const store = await loadStore();
-    expect(store.connect("bad id!")).toBe(false);
+    expect(store.connect("bad id!", "pw1234")).toBe(false);
     expect(store.joinError.value).toContain("영문+숫자");
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
   it("open되면 join을 보내고 연결 상태가 된다", async () => {
     const store = await loadStore();
-    expect(store.connect("  chulsoo  ")).toBe(true);
+    expect(store.connect("  chulsoo  ", "pw1234")).toBe(true);
     expect(store.connectionStatus.value).toBe("연결 중...");
     const ws = FakeWebSocket.last;
     expect(ws.url).toBe("ws://localhost:8080");
     ws.open();
-    expect(ws.sentJson()).toEqual([{ type: "join", loginId: "chulsoo" }]);
+    expect(ws.sentJson()).toEqual([{ type: "join", loginId: "chulsoo", password: "pw1234" }]);
     expect(store.isConnected.value).toBe(true);
     expect(store.connectionStatus.value).toBe("연결됨");
   });
@@ -72,7 +72,7 @@ describe("connect / join", () => {
 
   it("join_failed면 오류를 표시하고 연결을 닫는다", async () => {
     const store = await loadStore();
-    store.connect("ghost");
+    store.connect("ghost", "pw1234");
     const ws = FakeWebSocket.last;
     ws.open();
     vi.useFakeTimers();
@@ -101,7 +101,7 @@ describe("재연결", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
     const next = FakeWebSocket.last;
     next.open();
-    expect(next.sentJson()).toEqual([{ type: "join", loginId: "chulsoo" }]);
+    expect(next.sentJson()).toEqual([{ type: "join", loginId: "chulsoo", password: "pw1234" }]);
     expect(store.connectionStatus.value).toBe("연결됨");
   });
 
@@ -560,7 +560,7 @@ describe("내 상태", () => {
     const { store } = await connectedStore();
     expect(store.myStatus.value).toBe("online");
     store.setMyStatus("away");
-    store.connect("chulsoo");
+    store.connect("chulsoo", "pw1234");
     expect(store.myStatus.value).toBe("online");
   });
 
@@ -572,5 +572,53 @@ describe("내 상태", () => {
     expect(ws.sentJson()).toEqual([{ type: "status_set", status: "meeting" }]);
     // 본인 상태는 서버 방송값이 아니라 내 값을 쓴다
     expect(store.statusTextOf(10)).toBe("회의중(📝)");
+  });
+});
+
+describe("비밀번호 변경 / 초기화", () => {
+  it("isValidNewPassword: 영문+숫자 포함 8~50자만 허용한다", async () => {
+    const { isValidNewPassword } = await import("../useChatSocket");
+    expect(isValidNewPassword("abcd1234")).toBe(true);
+    expect(isValidNewPassword("abc1234")).toBe(false);
+    expect(isValidNewPassword("abcdefgh")).toBe(false);
+    expect(isValidNewPassword("12345678")).toBe(false);
+    expect(isValidNewPassword("a1".repeat(26))).toBe(false);
+  });
+
+  it("변경 성공 시 재연결 join과 저장된 로그인 정보에 새 비밀번호를 쓴다", async () => {
+    vi.useFakeTimers();
+    localStorage.setItem("vibe_talk_saved_login", JSON.stringify({ loginId: "chulsoo", password: "pw1234" }));
+    const { store, ws } = await connectedStore();
+    expect(store.changePassword("pw1234", "newpass99")).toBe(true);
+    expect(ws.sentJson()).toEqual([{ type: "password_change", currentPassword: "pw1234", newPassword: "newpass99" }]);
+    ws.receive({ type: "password_change_result", ok: true });
+    expect(store.passwordResult.value).toMatchObject({ ok: true, kind: "change", self: true });
+    expect(JSON.parse(localStorage.getItem("vibe_talk_saved_login")!)).toEqual({ loginId: "chulsoo", password: "newpass99" });
+
+    ws.drop();
+    vi.advanceTimersByTime(3000);
+    const next = FakeWebSocket.last;
+    next.open();
+    expect(next.sentJson()).toEqual([{ type: "join", loginId: "chulsoo", password: "newpass99" }]);
+    localStorage.clear();
+    vi.useRealTimers();
+  });
+
+  it("변경 실패면 사유를 담고 비밀번호는 그대로 둔다", async () => {
+    const { store, ws } = await connectedStore();
+    store.changePassword("wrong", "newpass99");
+    ws.receive({ type: "password_change_result", ok: false, text: "현재 비밀번호가 올바르지 않습니다." });
+    expect(store.passwordResult.value).toMatchObject({ ok: false, kind: "change", text: "현재 비밀번호가 올바르지 않습니다." });
+  });
+
+  it("본인 초기화는 targetUserNo 없이 보내고, admin 초기화는 대상 번호를 보낸다", async () => {
+    const { store, ws } = await connectedStore();
+    store.resetPassword();
+    store.resetPassword(11);
+    expect(ws.sentJson()).toEqual([{ type: "password_reset" }, { type: "password_reset", targetUserNo: 11 }]);
+    ws.receive({ type: "password_reset_result", ok: true, user_no: 10, self: true, password: "chulsoo5678" });
+    expect(store.passwordResult.value).toMatchObject({ ok: true, kind: "reset", self: true });
+    ws.receive({ type: "password_reset_result", ok: true, user_no: 11, self: false });
+    expect(store.passwordResult.value).toMatchObject({ ok: true, kind: "reset", self: false });
   });
 });

@@ -9,7 +9,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: "submit", loginId: string): void;
+  (e: "submit", loginId: string, password: string): void;
 }>();
 
 // 저장된 아이디/비밀번호가 있으면 미리 채운다
@@ -50,7 +50,7 @@ const submit = () => {
   error.value = "";
   saveLogin(savePassword.value ? { loginId: trimmed, password: passwordInput.value } : null);
   setAutoLogin(autoLogin.value);
-  emit("submit", trimmed);
+  emit("submit", trimmed, passwordInput.value);
 };
 
 const onEnter = () => {
