@@ -172,6 +172,25 @@ const confirmUserModal = () => {
   showUserModal.value = false;
 };
 
+// ─── 사용자 상세정보 모달 (더보기 메뉴 → '상세정보') ───
+// 추가/수정 모달의 입력 항목 중 아이디를 제외하고 읽기 전용으로 보여준다.
+// 상세 필드는 admin만 받는 usersDetail에 있으므로, 없으면 닉네임 외 항목은 '-'로 표시한다.
+const detailUser = ref<{ nickname: string; phone: string | null; userName: string | null; deptNo: number | null; isDeleted: boolean } | null>(null);
+const openDetailModal = (user: ChatUser) => {
+  const d = props.usersDetail.find((x) => x.user_no === user.user_no);
+  detailUser.value = {
+    nickname: d?.nickname ?? user.nickname,
+    phone: d?.phone ?? null,
+    userName: d?.userName ?? null,
+    deptNo: d?.deptNo ?? null,
+    isDeleted: d?.isDeleted ?? false,
+  };
+  closeMenu();
+};
+const closeDetailModal = () => {
+  detailUser.value = null;
+};
+
 // 내 닉네임 변경 (본인)
 const showRenameModal = ref(false);
 const renameInput = ref("");
@@ -276,6 +295,29 @@ const confirmRenameModal = () => {
     >
       <button @click="$emit('open-chat', menuUser!); closeMenu();">1:1 채팅하기</button>
       <button @click="$emit('create-room-with', menuUser!); closeMenu();">방 만들기</button>
+      <button @click="openDetailModal(menuUser!)">상세정보</button>
+    </div>
+
+    <!-- 사용자 상세정보 모달 (읽기 전용, 아이디 제외) -->
+    <div v-if="detailUser" class="modal-backdrop" @click="closeDetailModal">
+      <div class="modal-card" @click.stop>
+        <h3>상세정보</h3>
+        <dl class="detail-list">
+          <dt>닉네임</dt>
+          <dd>{{ detailUser.nickname }}</dd>
+          <dt>전화번호</dt>
+          <dd>{{ detailUser.phone || '-' }}</dd>
+          <dt>이름</dt>
+          <dd>{{ detailUser.userName || '-' }}</dd>
+          <dt>부서</dt>
+          <dd>{{ deptNameOf(detailUser.deptNo) || '-' }}</dd>
+          <dt>탈퇴여부</dt>
+          <dd>{{ detailUser.isDeleted ? '탈퇴' : '정상' }}</dd>
+        </dl>
+        <div class="modal-actions">
+          <button class="small-btn primary" @click="closeDetailModal">닫기</button>
+        </div>
+      </div>
     </div>
 
     <!-- 사용자 추가/수정 모달 (admin 전용) -->
@@ -538,5 +580,14 @@ const confirmRenameModal = () => {
 }
 .text-input:disabled { background: #f1f3f5; color: #555; }
 .check-row { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-top: 12px; }
+.detail-list {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 8px 12px;
+  margin: 0;
+  font-size: 14px;
+}
+.detail-list dt { color: #555; font-size: 13px; }
+.detail-list dd { margin: 0; color: #222; word-break: break-all; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 </style>
