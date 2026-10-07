@@ -91,6 +91,8 @@ const profileImageResult = ref<{ seq: number; ok: boolean; text: string } | null
 // password_change / password_reset 결과 — seq로 매 응답을 구분한다
 // kind: 'change' | 'reset', self: 본인 비밀번호가 바뀌었는지
 const passwordResult = ref<{ seq: number; ok: boolean; kind: "change" | "reset"; self: boolean; text: string } | null>(null);
+// 신규 등록 / 초기화 직후 로그인: 비밀번호를 바꿔야 입장된다 (서버가 password_change_required로 알림)
+const mustChangePassword = ref(false);
 // 비밀번호 변경 요청 중인 새 비밀번호 (성공 응답 시 loginPassword로 반영)
 let pendingNewPassword: string | null = null;
 const isAdmin = () => myUserNo.value === 1;
@@ -422,7 +424,13 @@ const handleIncoming = (raw: string) => {
       ok: data.ok === true,
       text: data.ok ? "" : String(data.text || "부서 저장에 실패했습니다"),
     };
+  } else if (data.type === "password_change_required") {
+    // 아직 입장 전 — 비밀번호 변경 화면만 보여준다 (myUserNo는 join_ok 때 설정)
+    mustChangePassword.value = true;
+    if (typeof data.nickname === "string" && data.nickname) nickname.value = data.nickname;
+    joinError.value = "";
   } else if (data.type === "join_ok" || data.type === "my_profile") {
+    if (data.type === "join_ok") mustChangePassword.value = false;
     const no = toNo(data.user_no ?? data.userNo);
     if (no != null) {
       myUserNo.value = no;
@@ -1072,6 +1080,7 @@ const connect = (loginIdInput: string, password: string): boolean => {
   const loginChanged = loginId.value !== "" && loginId.value !== trimmed;
   loginId.value = trimmed;
   loginPassword = password;
+  mustChangePassword.value = false;
   nickname.value = "";
   myUserNo.value = null;
   // 서버도 join 시 기본값(online)으로 되돌리므로 화면 상태를 맞춘다
@@ -1198,6 +1207,9 @@ const changePassword = (currentPassword: string, newPassword: string): boolean =
   return true;
 };
 
+// 강제 변경: 현재 비밀번호는 방금 로그인에 쓴 값을 그대로 보낸다
+const changePasswordForced = (newPassword: string): boolean => changePassword(loginPassword, newPassword);
+
 // ─── 비밀번호 초기화 (본인 + admin) ───
 // targetNo 생략 시 본인. 아이디 + 전화번호 뒤 4자리로 되돌린다.
 const resetPassword = (targetNo?: number): boolean => {
@@ -1242,6 +1254,7 @@ const disconnect = () => {
   ws = null;
   isConnected.value = false;
   connectionStatus.value = "연결 끊김";
+  mustChangePassword.value = false;
   // 로그아웃. 안읽은 건수는 서버 DB에 이미 저장돼 있으므로(읽음은 unread_clear로 보고됨)
   // 여기서는 화면 상태만 비운다. 다시 로그인하면 join 응답의 unread_state로 복원된다.
   pendingOneToOne.clear();
@@ -1327,7 +1340,9 @@ export function useChatSocket() {
     profileImageResult,
     setProfileImage,
     passwordResult,
+    mustChangePassword,
     changePassword,
+    changePasswordForced,
     resetPassword,
   };
 }

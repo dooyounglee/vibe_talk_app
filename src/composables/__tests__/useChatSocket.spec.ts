@@ -622,3 +622,32 @@ describe("비밀번호 변경 / 초기화", () => {
     expect(store.passwordResult.value).toMatchObject({ ok: true, kind: "reset", self: false });
   });
 });
+
+describe("첫 로그인 비밀번호 변경 강제", () => {
+  it("password_change_required면 강제 상태가 되고, 로그인 비밀번호로 변경을 보낸 뒤 join_ok에 해제된다", async () => {
+    const store = await loadStore();
+    store.connect("chulsoo", "chulsoo5678");
+    const ws = FakeWebSocket.last;
+    ws.open();
+    ws.receive({ type: "password_change_required", user_no: 10, loginId: "chulsoo", nickname: "철수" });
+    expect(store.mustChangePassword.value).toBe(true);
+    expect(store.myUserNo.value).toBeNull();
+    ws.sent = [];
+    expect(store.changePasswordForced("newpass99")).toBe(true);
+    expect(ws.sentJson()).toEqual([{ type: "password_change", currentPassword: "chulsoo5678", newPassword: "newpass99" }]);
+    ws.receive({ type: "password_change_result", ok: true });
+    ws.receive({ type: "join_ok", user_no: 10, nickname: "철수", loginId: "chulsoo" });
+    expect(store.mustChangePassword.value).toBe(false);
+    expect(store.myUserNo.value).toBe(10);
+  });
+
+  it("나가기(disconnect)하면 강제 상태도 풀린다", async () => {
+    const store = await loadStore();
+    store.connect("chulsoo", "chulsoo5678");
+    const ws = FakeWebSocket.last;
+    ws.open();
+    ws.receive({ type: "password_change_required", user_no: 10, loginId: "chulsoo" });
+    store.disconnect();
+    expect(store.mustChangePassword.value).toBe(false);
+  });
+});

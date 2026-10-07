@@ -92,7 +92,9 @@ const {
   profileImageResult,
   setProfileImage,
   passwordResult,
+  mustChangePassword,
   changePassword,
+  changePasswordForced,
   resetPassword,
 } = useChatSocket();
 
@@ -828,6 +830,10 @@ const openPasswordChangeModal = () => {
 const handleApplyPasswordChange = (current: string, next: string, done: (sent: boolean) => void) => {
   done(changePassword(current, next));
 };
+// 신규 등록 / 초기화 후 첫 로그인: 메인 화면 대신 강제 변경 화면 ('나가기'만 가능)
+const handleApplyForcedPasswordChange = (_current: string, next: string, done: (sent: boolean) => void) => {
+  done(changePasswordForced(next));
+};
 const showMyPasswordResetModal = ref(false);
 const openMyPasswordResetModal = () => {
   closeHeaderMenu();
@@ -881,6 +887,16 @@ const visibleRooms = computed<RoomInfo[]>(() =>
     :is-connected="isConnected"
     :join-error="joinError"
     @submit="handleNicknameSubmit"
+  />
+
+  <!-- 비밀번호 변경 강제 (신규 등록 / 초기화 후 첫 로그인) — 변경해야 서버가 입장시킨다 -->
+  <PasswordChangeModal
+    v-else-if="mustChangePassword"
+    forced
+    :is-connected="isConnected"
+    :result="passwordResult"
+    @apply="handleApplyForcedPasswordChange"
+    @close="handleLeave"
   />
 
   <!-- 2번 화면: 내 채팅방 + 사용자 목록 (채팅은 별도 윈도우 창으로 열림) -->

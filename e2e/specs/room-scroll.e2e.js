@@ -10,6 +10,12 @@ const WS_URL = "ws://localhost:8080";
 const SEED_COUNT = 100;
 const PAGE_SIZE = 30;
 
+// 테스트 사용자 전화번호 고정 → 초기 비밀번호 = 아이디 + '1234' (admin은 'admin').
+// 신규 계정은 첫 로그인에 비밀번호 변경이 강제되므로 '<아이디>Pass99'로 바꾸고 이후엔 그 값을 쓴다.
+const TEST_PHONE = "010-0000-1234";
+const passwords = new Map([["admin", "admin"]]);
+const currentPassword = (loginId) => passwords.get(loginId) ?? `${loginId}1234`;
+
 /** 서버에 붙는 테스트용 클라이언트 (Node 22+ 내장 WebSocket) */
 const connectClient = (loginId) =>
   new Promise((resolve, reject) => {
@@ -31,14 +37,20 @@ const connectClient = (loginId) =>
       });
     ws.addEventListener("message", (e) => {
       try {
-        inbox.push(JSON.parse(String(e.data)));
+        const m = JSON.parse(String(e.data));
+        inbox.push(m);
+        if (m.type === "password_change_required") {
+          const next = `${loginId}Pass99`;
+          ws.send(JSON.stringify({ type: "password_change", currentPassword: currentPassword(loginId), newPassword: next }));
+          passwords.set(loginId, next);
+        }
       } catch {
         // 무시
       }
     });
     ws.addEventListener("error", () => reject(new Error(`${loginId}: 서버 연결 실패`)));
     ws.addEventListener("open", async () => {
-      ws.send(JSON.stringify({ type: "join", loginId, password: loginId }));
+      ws.send(JSON.stringify({ type: "join", loginId, password: currentPassword(loginId) }));
       try {
         await waitFor((m) => m.type === "join_ok");
         resolve({ inbox, waitFor, send: (o) => ws.send(JSON.stringify(o)), close: () => ws.close() });
@@ -97,7 +109,7 @@ describe("채팅방 이전 대화 더보기 (위로 무한스크롤)", () => {
   before(async () => {
     // ─── 테스트 데이터: bob 등록 → admin+bob 방 → 메시지 100건 ───
     const admin = await connectClient("admin");
-    admin.send({ type: "user_upsert", loginId: "bob", nickname: "bob", isDeleted: false });
+    admin.send({ type: "user_upsert", loginId: "bob", nickname: "bob", phone: TEST_PHONE, isDeleted: false });
     const reg = await admin.waitFor((m) => m.type === "user_upsert_result");
     if (!reg.ok) throw new Error("bob 등록 실패");
     admin.send({ type: "room_create", memberNos: [reg.user_no] });

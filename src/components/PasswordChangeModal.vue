@@ -4,8 +4,11 @@ import { isValidNewPassword } from "../composables/useChatSocket";
 
 // 비밀번호 변경 모달 (메인 화면 헤더 ⋮ 메뉴 → '비번변경')
 //   현재 비밀번호 확인 + 새 비밀번호(8~50자, 영문+숫자 조합) + 확인
+// forced: 신규 등록 / 초기화 후 첫 로그인의 강제 변경. 현재 비밀번호 칸 없이(부모가 로그인 값 사용)
+//         닫기 대신 '나가기'만 가능하고, 바깥 클릭으로 닫히지 않는다.
 // 서버 반영은 부모가 소켓으로 보낸다(apply). result(seq)가 바뀌면 성공 시 완료 안내, 실패 시 사유를 보여준다.
 const props = defineProps<{
+  forced?: boolean;
   isConnected: boolean;
   result: { seq: number; ok: boolean; kind: "change" | "reset"; text: string } | null;
 }>();
@@ -27,7 +30,7 @@ let waitingFromSeq: number | null = null;
 
 const submit = () => {
   if (busy.value) return;
-  if (!currentInput.value) {
+  if (!props.forced && !currentInput.value) {
     error.value = "현재 비밀번호를 입력하세요.";
     return;
   }
@@ -39,7 +42,7 @@ const submit = () => {
     error.value = "새 비밀번호와 확인이 일치하지 않습니다.";
     return;
   }
-  if (newInput.value === currentInput.value) {
+  if (!props.forced && newInput.value === currentInput.value) {
     error.value = "현재 비밀번호와 다른 비밀번호를 입력하세요.";
     return;
   }
@@ -70,12 +73,17 @@ watch(
 </script>
 
 <template>
-  <div class="modal-backdrop" @click="emit('close')">
+  <div class="modal-backdrop" :class="{ forced }" @click="!forced && emit('close')">
     <div class="modal-card" @click.stop>
-      <h3>비번변경</h3>
+      <h3>{{ forced ? "비밀번호 변경 필요" : "비번변경" }}</h3>
       <template v-if="!done">
-        <label class="field-label">현재 비밀번호</label>
+        <p v-if="forced" class="notice">
+          초기 비밀번호로 로그인했습니다. 새 비밀번호로 변경해야 이용할 수 있습니다.
+          (현재·초기화 전 비밀번호와 달라야 합니다)
+        </p>
+        <label v-if="!forced" class="field-label">현재 비밀번호</label>
         <input
+          v-if="!forced"
           v-model="currentInput"
           type="password"
           class="text-input current-password"
@@ -103,7 +111,7 @@ watch(
         />
         <p v-if="error" class="error">{{ error }}</p>
         <div class="modal-actions">
-          <button class="small-btn" @click="emit('close')">취소</button>
+          <button class="small-btn" @click="emit('close')">{{ forced ? "나가기" : "취소" }}</button>
           <button class="small-btn primary" :disabled="busy || !isConnected" @click="submit">
             {{ busy ? "변경 중..." : "변경" }}
           </button>
@@ -148,6 +156,8 @@ watch(
   box-sizing: border-box;
 }
 .message { margin: 0; font-size: 14px; color: #333; }
+.modal-backdrop.forced { background: #f4f6f8; }
+.notice { margin: 0 0 4px; font-size: 13px; color: #555; line-height: 1.5; }
 .small-btn {
   padding: 6px 12px; font-size: 13px;
   border: 1px solid #ddd; border-radius: 6px;

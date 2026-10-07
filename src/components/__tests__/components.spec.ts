@@ -9,6 +9,8 @@ import UserSearchInput from "../UserSearchInput.vue";
 import NicknameView from "../NicknameView.vue";
 import ChatWindow from "../ChatWindow.vue";
 import ImageViewer from "../ImageViewer.vue";
+import PasswordChangeModal from "../PasswordChangeModal.vue";
+import { normalizePhone } from "../../utils/phone";
 import { attachmentFromRoute } from "../../utils/imageWindow";
 import { AUTO_LOGIN_STORAGE_KEY, SAVED_LOGIN_STORAGE_KEY } from "../../constants";
 import { ROOM_TITLE_INPUT_MAX_LENGTH, type ChatMessage, type ChatUser } from "../../types/chat";
@@ -556,5 +558,57 @@ describe("ChatWindow 첨부파일", () => {
     const dataTransfer = { types: ["Files"], files: [fileOf("a.txt", "text/plain")] };
     await wrapper.find(".chat-window").trigger("drop", { dataTransfer });
     expect(wrapper.emitted("send-files")).toBeUndefined();
+  });
+});
+
+describe("normalizePhone", () => {
+  it("휴대폰/일반번호를 하이픈 형식으로 맞춘다", () => {
+    expect(normalizePhone("01012345678")).toBe("010-1234-5678");
+    expect(normalizePhone(" 010-1234-5678 ")).toBe("010-1234-5678");
+    expect(normalizePhone("021234567")).toBe("02-123-4567");
+    expect(normalizePhone("0311234567")).toBe("031-123-4567");
+  });
+  it("형식이 틀리면 null", () => {
+    for (const bad of ["", "1234", "1012345678", "010-1234-567", "010--1234-5678", "010-12a4-5678", "010123456789"]) {
+      expect(normalizePhone(bad)).toBeNull();
+    }
+  });
+});
+
+describe("PasswordChangeModal", () => {
+  const result = null;
+
+  it("일반 모드: 현재 비밀번호 + 새 비밀번호를 apply한다", async () => {
+    const wrapper = mount(PasswordChangeModal, { props: { isConnected: true, result } });
+    await wrapper.get(".current-password").setValue("old1234");
+    await wrapper.get(".new-password").setValue("newpass99");
+    await wrapper.get(".confirm-password").setValue("newpass99");
+    await wrapper.get(".small-btn.primary").trigger("click");
+    expect(last(wrapper.emitted("apply"))?.slice(0, 2)).toEqual(["old1234", "newpass99"]);
+  });
+
+  it("강제 모드: 현재 비밀번호 칸이 없고, 바깥 클릭으로 닫히지 않으며 '나가기'만 있다", async () => {
+    const wrapper = mount(PasswordChangeModal, { props: { forced: true, isConnected: true, result } });
+    expect(wrapper.find(".current-password").exists()).toBe(false);
+    await wrapper.get(".modal-backdrop").trigger("click");
+    expect(wrapper.emitted("close")).toBeUndefined();
+    expect(wrapper.get(".small-btn:not(.primary)").text()).toBe("나가기");
+    await wrapper.get(".new-password").setValue("newpass99");
+    await wrapper.get(".confirm-password").setValue("newpass99");
+    await wrapper.get(".small-btn.primary").trigger("click");
+    expect(last(wrapper.emitted("apply"))?.[1]).toBe("newpass99");
+  });
+
+  it("규칙 위반/확인 불일치면 보내지 않고 사유를 보여준다", async () => {
+    const wrapper = mount(PasswordChangeModal, { props: { forced: true, isConnected: true, result } });
+    await wrapper.get(".new-password").setValue("short1");
+    await wrapper.get(".confirm-password").setValue("short1");
+    await wrapper.get(".small-btn.primary").trigger("click");
+    expect(wrapper.text()).toContain("8~50자");
+    await wrapper.get(".new-password").setValue("newpass99");
+    await wrapper.get(".confirm-password").setValue("newpass98");
+    await wrapper.get(".small-btn.primary").trigger("click");
+    expect(wrapper.text()).toContain("일치하지 않습니다");
+    expect(wrapper.emitted("apply")).toBeUndefined();
   });
 });

@@ -7,6 +7,7 @@ import UserSearchInput from "./UserSearchInput.vue";
 import ProfileAvatar from "./ProfileAvatar.vue";
 import UserDetailModal, { type UserDetailInfo } from "./UserDetailModal.vue";
 import PasswordResetModal from "./PasswordResetModal.vue";
+import { normalizePhone } from "../utils/phone";
 
 const props = defineProps<{
   myUserNo: number | null;
@@ -177,8 +178,16 @@ const confirmUserModal = () => {
     modalError.value = "닉네임을 입력하세요.";
     return;
   }
+  if (!editPhone.value.trim()) {
+    modalError.value = "전화번호를 입력하세요.";
+    return;
+  }
+  const phone = normalizePhone(editPhone.value);
+  if (!phone) {
+    modalError.value = "전화번호 형식이 올바르지 않습니다. (예: 010-1234-5678)";
+    return;
+  }
   modalError.value = "";
-  const phone = editPhone.value.trim() ? editPhone.value.trim().slice(0, 30) : null;
   const userName = editUserName.value.trim() ? editUserName.value.trim().slice(0, 30) : null;
   emit("upsert-user", { loginId: id, nickname: nick, phone, userName, isDeleted: editIsDeleted.value, deptNo: editDeptNo.value });
   showUserModal.value = false;
@@ -330,12 +339,13 @@ const closeDetailModal = () => {
           maxlength="20"
           @keyup.enter="confirmUserModal"
         />
-        <label class="field-label">전화번호</label>
+        <label class="field-label">전화번호 (필수)</label>
         <input
           v-model="editPhone"
-          class="text-input"
-          placeholder="전화번호 입력"
-          maxlength="30"
+          class="text-input phone-input"
+          placeholder="010-1234-5678"
+          maxlength="13"
+          inputmode="tel"
           @keyup.enter="confirmUserModal"
         />
         <label class="field-label">이름</label>
