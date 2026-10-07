@@ -103,6 +103,25 @@ export interface RoomInfo {
   lastMessageAt?: number | null;
   /** 마지막 메시지 발신자 닉네임 (없으면 null) */
   lastMessageSender?: string | null;
+  /** 단체방 이미지 (사용자별 — 내가 등록한 이미지, null = 기본 이미지) */
+  roomImage?: ChatAttachment | null;
+  /** 1:1방 상대의 프로필 이미지 (null = 기본 이미지) */
+  peerImage?: ChatAttachment | null;
+}
+
+/** 1:1방 여부 (멤버 정확히 2명) — 방 이미지로 상대 프로필 사진을 쓴다 */
+export function isOneToOneRoom(room: Pick<RoomInfo, "memberCount">): boolean {
+  return room.memberCount === 2;
+}
+
+/** 방 이미지를 바꿀 수 있는 단체방 여부 (3명 이상, 서버 setRoomImage 와 같은 기준) */
+export function canEditRoomImage(room: Pick<RoomInfo, "memberCount">): boolean {
+  return room.memberCount > 2;
+}
+
+/** 목록·채팅창에 그릴 방 이미지: 1:1=상대 프로필, 단체=방 이미지 (null = 기본 이미지) */
+export function roomImageOf(room: RoomInfo): ChatAttachment | null {
+  return (isOneToOneRoom(room) ? room.peerImage : room.roomImage) ?? null;
 }
 
 // ─── 내 상태 (접속/오프라인/회의중/바쁨/자리비움) ───

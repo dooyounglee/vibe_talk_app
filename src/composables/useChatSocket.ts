@@ -97,6 +97,9 @@ const mustChangePassword = ref(false);
 let pendingNewPassword: string | null = null;
 const isAdmin = () => myUserNo.value === 1;
 
+// room_image_set 결과 — seq로 매 응답을 구분해 모달이 성공/실패를 감지한다 (roomId: 대상 방)
+const roomImageResult = ref<{ seq: number; roomId: number; ok: boolean; text: string } | null>(null);
+
 // 방제목 수정 실패 사유 (RenameRoomModal에 표시). 성공하면 서버가 새 목록을 주므로 비운다.
 const roomRenameError = ref<{ roomId: number; reason: string } | null>(null);
 
@@ -492,6 +495,13 @@ const handleIncoming = (raw: string) => {
       ok: data.ok === true,
       text: data.ok ? "" : String(data.text || "프로필 이미지 변경에 실패했습니다"),
     };
+  } else if (data.type === "room_image_result") {
+    roomImageResult.value = {
+      seq: (roomImageResult.value?.seq ?? 0) + 1,
+      roomId: Number(data.roomId) || 0,
+      ok: data.ok === true,
+      text: data.ok ? "" : String(data.text || "방 이미지 변경에 실패했습니다"),
+    };
   } else if (data.type === "system") {
     // 방 스코프 system 알림은 해당 방 박스에, 전역 알림은 무시(표시 위치 없음)
     const roomId = Number(data.roomId);
@@ -528,6 +538,8 @@ const handleIncoming = (raw: string) => {
           typeof r.lastMessageAt === "number" ? r.lastMessageAt : null,
         lastMessageSender:
           typeof r.lastMessageSender === "string" ? r.lastMessageSender : null,
+        roomImage: toChatAttachment((r as unknown as Record<string, unknown>).roomImage) ?? null,
+        peerImage: toChatAttachment((r as unknown as Record<string, unknown>).peerImage) ?? null,
       }));
     pruneRooms();
   } else if (data.type === "history_room") {
@@ -1197,6 +1209,15 @@ const setProfileImage = (fileId: string | null): boolean => {
   return true;
 };
 
+// ─── 단체방 이미지 변경/초기화 (사용자별 — 방제목처럼 나에게만 적용) ───
+// fileId = uploadAttachment 로 올린 이미지 키, null = 기본 이미지로 초기화
+const setRoomImage = (roomId: number, fileId: string | null): boolean => {
+  if (!Number.isInteger(roomId) || roomId <= 0) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_image_set", roomId, fileId }));
+  return true;
+};
+
 // ─── 비밀번호 변경 (본인) ───
 // 새 비밀번호 규칙(8~50자, 영문+숫자)은 서버에서도 검사한다
 export const isValidNewPassword = (v: string) => v.length >= 8 && v.length <= 50 && /[A-Za-z]/.test(v) && /\d/.test(v);
@@ -1339,6 +1360,8 @@ export function useChatSocket() {
     myProfileImage,
     profileImageResult,
     setProfileImage,
+    roomImageResult,
+    setRoomImage,
     passwordResult,
     mustChangePassword,
     changePassword,

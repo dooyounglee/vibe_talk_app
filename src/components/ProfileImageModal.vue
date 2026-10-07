@@ -6,13 +6,22 @@ import ProfileAvatar from "./ProfileAvatar.vue";
 
 // 프로필 이미지 설정 모달 (메인 화면 헤더 ⋮ 메뉴 → '프로필이미지 설정')
 //   현재 이미지 확인 / 새 이미지 선택(미리보기) 후 저장 / 기본 이미지로 초기화
+// 단체 채팅방 이미지 설정(채팅방 상단 🖼)에도 재사용한다 (title / group)
 // 업로드는 이 모달이 직접 하고(POST /upload), 서버 반영은 부모가 소켓으로 보낸다(apply).
 // 부모가 넘겨주는 result(seq)가 바뀌면 성공 시 닫고, 실패 시 사유를 보여준다.
-const props = defineProps<{
-  currentImage: ChatAttachment | null;
-  isConnected: boolean;
-  result: { seq: number; ok: boolean; text: string } | null;
-}>();
+const props = withDefaults(
+  defineProps<{
+    currentImage: ChatAttachment | null;
+    isConnected: boolean;
+    result: { seq: number; ok: boolean; text: string } | null;
+    title?: string;
+    /** 기본 이미지를 여러 사람 실루엣(단체 채팅방)으로 그린다 */
+    group?: boolean;
+    /** 버튼 위 안내 문구 (없으면 표시하지 않음) */
+    note?: string;
+  }>(),
+  { title: "프로필이미지 설정", group: false, note: "" },
+);
 
 const emit = defineEmits<{
   /** fileId = 새 이미지, null = 기본 이미지로 초기화. 보내지 못했으면 부모가 false 반환 */
@@ -110,9 +119,9 @@ watch(
 <template>
   <div class="modal-backdrop" @click="emit('cancel')">
     <div class="modal-card" @click.stop>
-      <h3>프로필이미지 설정</h3>
+      <h3>{{ title }}</h3>
       <div class="preview">
-        <ProfileAvatar :image="currentImage" :preview-url="previewUrl" :size="140" />
+        <ProfileAvatar :image="currentImage" :preview-url="previewUrl" :size="140" :group="group" />
         <p class="caption">
           {{ previewUrl ? "새 이미지 미리보기 (저장을 눌러야 적용됩니다)" : currentImage ? "현재 이미지" : "기본 이미지" }}
         </p>
@@ -124,6 +133,7 @@ watch(
           초기화
         </button>
       </div>
+      <p v-if="note" class="note">{{ note }}</p>
       <p v-if="error" class="error">{{ error }}</p>
       <div class="modal-actions">
         <button class="small-btn" @click="emit('cancel')">취소</button>
@@ -166,6 +176,7 @@ watch(
 .small-btn:disabled { color: #aaa; cursor: default; }
 .small-btn.primary { background: #007bff; color: #fff; border-color: #007bff; }
 .small-btn.primary:disabled { background: #8fbfff; border-color: #8fbfff; color: #fff; }
+.note { color: #666; font-size: 12px; margin: 10px 0 0; text-align: center; }
 .error { color: #d33; font-size: 13px; margin: 8px 0 0; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 </style>

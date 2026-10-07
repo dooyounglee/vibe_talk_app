@@ -5,8 +5,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import ChatWindow from "../components/ChatWindow.vue";
 import CreateRoomModal from "../components/CreateRoomModal.vue";
 import RenameRoomModal from "../components/RenameRoomModal.vue";
+import ProfileImageModal from "../components/ProfileImageModal.vue";
 import { useChatRoom } from "../composables/useChatRoom";
 import { currentRoomIdFromUrl, isTauriRuntime } from "../chatBus";
+import { canEditRoomImage } from "../types/chat";
 
 const route = useRoute();
 const router = useRouter();
@@ -30,7 +32,19 @@ const {
   isConnected, hasSession, members, users, send, sendFiles, uploading, renameRoom, invite, announceClose,
   hasMore, loadingOlder, loadOlder,
   hasNewer, loadingNewer, loadNewer, loadLatest, searchState, search, jumpTo,
+  memberCount, roomImage, roomImageResult, setRoomImage,
 } = useChatRoom(roomId);
+
+// 상단 🖼 → 단체방 이미지 설정 모달 (3명 이상 단체방만, 1:1은 상대 프로필 사진을 쓴다)
+const canEditImage = computed(() => canEditRoomImage({ memberCount: memberCount.value }));
+const showRoomImageModal = ref(false);
+const handleApplyRoomImage = (fileId: string | null, done: (sent: boolean) => void) => {
+  done(setRoomImage(fileId));
+};
+// 인원이 줄어 1:1이 되면 열려 있던 모달을 닫는다
+watch(canEditImage, (ok) => {
+  if (!ok) showRoomImageModal.value = false;
+});
 
 // 상단 연필 → 방제목 변경 모달
 const showRenameModal = ref(false);
@@ -164,6 +178,13 @@ const goHome = () => {
         @click="openInviteModal"
       >+</button>
       <button
+        v-if="canEditImage"
+        class="image-btn"
+        title="방 이미지 설정"
+        :disabled="!isConnected"
+        @click="showRoomImageModal = true"
+      >🖼</button>
+      <button
         class="rename-btn"
         title="방제목 변경"
         :disabled="!isConnected"
@@ -194,6 +215,19 @@ const goHome = () => {
     @cancel="closeRenameModal"
   />
 
+  <!-- 상단 🖼로 연 단체방 이미지 설정 모달 (등록/변경/초기화, 방제목처럼 나에게만 적용) -->
+  <ProfileImageModal
+    v-if="showRoomImageModal && hasSession && canEditImage"
+    title="방 이미지 설정"
+    group
+    note="변경한 이미지는 나에게만 적용됩니다. 다른 참여자는 원래 이미지를 봅니다."
+    :current-image="roomImage"
+    :is-connected="isConnected"
+    :result="roomImageResult"
+    @apply="handleApplyRoomImage"
+    @cancel="showRoomImageModal = false"
+  />
+
   <div v-if="!hasSession" class="no-session">
     <p>로그인 정보가 없습니다.<br />메인 창에서 먼저 입장해주세요.</p>
     <div class="btn-row">
@@ -206,6 +240,7 @@ const goHome = () => {
 <style scoped>
 /* 상단 방제목 오른쪽의 연필 버튼 (ChatWindow 헤더 슬롯) */
 .rename-btn,
+.image-btn,
 .invite-btn {
   border: none;
   background: transparent;
@@ -218,8 +253,10 @@ const goHome = () => {
   opacity: 0.9;
 }
 .rename-btn:hover,
+.image-btn:hover,
 .invite-btn:hover { background: rgba(255, 255, 255, 0.2); opacity: 1; }
 .rename-btn:disabled,
+.image-btn:disabled,
 .invite-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .no-session {
   height: 100vh; height: 100dvh;

@@ -10,7 +10,7 @@ import {
   type ChatBus,
   type ChatBusHandler,
 } from "../chatBus";
-import type { ChatMessage, ChatUser, RoomSearchState } from "../types/chat";
+import type { ChatAttachment, ChatMessage, ChatUser, RoomSearchState } from "../types/chat";
 import { roomDisplayName, truncateRoomTitle, ROOM_TITLE_INPUT_MAX_LENGTH } from "../types/chat";
 import { useChatSocket } from "./useChatSocket";
 import { useWindowFocus } from "./useWindowFocus";
@@ -40,6 +40,9 @@ export function useChatRoom(roomId: { readonly value: number }) {
   const busHasNewer = ref(false);
   const busLoadingNewer = ref(false);
   const busSearch = ref<RoomSearchState | null>(null);
+  const busMemberCount = ref(0);
+  const busRoomImage = ref<ChatAttachment | null>(null);
+  const busRoomImageResult = ref<{ seq: number; ok: boolean; text: string } | null>(null);
   const linked = ref(false);
   // 메인 창 연결 대기 중 (LINK_TIMEOUT_MS 안에 연결되지 않으면 false)
   const linkPending = ref(true);
@@ -133,6 +136,9 @@ export function useChatRoom(roomId: { readonly value: number }) {
         msg.hasNewer === true, msg.loadingNewer === true, msg.search ?? null,
       );
       busOwnerNo.value = typeof msg.ownerNo === "number" ? msg.ownerNo : null;
+      busMemberCount.value = typeof msg.memberCount === "number" ? msg.memberCount : 0;
+      busRoomImage.value = msg.roomImage ?? null;
+      busRoomImageResult.value = msg.roomImageResult ?? null;
     } else if (msg.kind === "main-ready") {
       announceOpen();
       // "아직 보고 있는 중"도 함께 알려 배지가 되살아나지 않게 한다
@@ -220,6 +226,19 @@ export function useChatRoom(roomId: { readonly value: number }) {
   const ownerNo: ComputedRef<number | null> = computed(() =>
     direct.value ? (myInfo.value?.owner_no || null) : busOwnerNo.value,
   );
+  // 방 인원수 / 단체방 이미지 (채팅방 상단 🖼 → 방 이미지 설정 모달용)
+  const memberCount: ComputedRef<number> = computed(() =>
+    direct.value ? (myInfo.value?.memberCount ?? 0) : busMemberCount.value,
+  );
+  const roomImage: ComputedRef<ChatAttachment | null> = computed(() =>
+    direct.value ? (myInfo.value?.roomImage ?? null) : busRoomImage.value,
+  );
+  // 이 방에 대한 결과만 넘긴다 (같은 탭이면 전역 결과에서 roomId로 거른다)
+  const roomImageResult: ComputedRef<{ seq: number; ok: boolean; text: string } | null> = computed(() => {
+    if (!direct.value) return busRoomImageResult.value;
+    const r = store.roomImageResult.value;
+    return r && r.roomId === effectiveRoomId.value ? r : null;
+  });
   const myUserNo: ComputedRef<number | null> = computed(() =>
     direct.value ? store.myUserNo.value : busUserNo.value,
   );
@@ -369,6 +388,20 @@ export function useChatRoom(roomId: { readonly value: number }) {
     }
   };
 
+  // 단체방 이미지 변경/초기화 (나에게만 적용). 방제목 수정과 같은 경로 (같은 탭=직접, 새 창=메인 창 경유)
+  const setRoomImage = (fileId: string | null): boolean => {
+    const target = effectiveRoomId.value;
+    if (!target) return false;
+    if (direct.value) return store.setRoomImage(target, fileId);
+    if (!linked.value || !busIsConnected.value) return false;
+    try {
+      bus?.post({ kind: "room-image-set", roomId: target, fileId, mainId: myMainId ?? undefined });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   // 방 초대. 방제목 수정과 완전히 같은 경로를 쓴다:
   //   같은 탭(direct)이면 소켓이 바로 있으므로 직접 보내고,
   //   새 창이면 소켓이 있는 메인 창에 버스로 요청만 넘긴다.
@@ -474,6 +507,10 @@ export function useChatRoom(roomId: { readonly value: number }) {
     myNickname,
     roomName: rname,
     ownerNo,
+    memberCount,
+    roomImage,
+    roomImageResult,
+    setRoomImage,
     members,
     users,
     connectionStatus,

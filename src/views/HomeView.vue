@@ -91,6 +91,8 @@ const {
   myProfileImage,
   profileImageResult,
   setProfileImage,
+  roomImageResult,
+  setRoomImage,
   passwordResult,
   mustChangePassword,
   changePassword,
@@ -279,6 +281,12 @@ const broadcastRoom = (roomId: number) => {
     search: roomSearch.value[roomId]
       ? { ...roomSearch.value[roomId], ids: [...roomSearch.value[roomId].ids] }
       : null,
+    memberCount: info?.memberCount ?? 0,
+    roomImage: info?.roomImage ? { ...info.roomImage } : null,
+    roomImageResult:
+      roomImageResult.value && roomImageResult.value.roomId === roomId
+        ? { seq: roomImageResult.value.seq, ok: roomImageResult.value.ok, text: roomImageResult.value.text }
+        : null,
     mainId,
   });
 };
@@ -489,6 +497,11 @@ onMounted(() => {
         // 서버가 my_rooms를 내려주면 목록이 → 열린 방 창 순서로 자동 갱신된다.
         renameRoom(msg.roomId, msg.title);
         break;
+      case "room-image-set":
+        // 채팅방 창(팝업)에서 🖼로 요청한 단체방 이미지 변경/초기화.
+        // 응답(room_image_result)과 갱신된 my_rooms가 오면 아래 watch가 열린 창에 스냅샷을 다시 보낸다.
+        setRoomImage(msg.roomId, msg.fileId);
+        break;
       case "room-invite":
         // 채팅방 창(팝업)에서 '+'로 요청한 초대.
         // 소켓은 메인 창에만 있으므로 여기서 서버로 넘기고,
@@ -614,7 +627,7 @@ onUnmounted(() => {
 
 // 방/연결 상태가 바뀌면 열려 있는 채팅방 창들에 스냅샷 브로드캐스트
 watch(
-  [roomMessages, roomMembers, roomHasMore, roomLoadingOlder, roomHasNewer, roomLoadingNewer, roomSearch, connectionStatus, isConnected, nickname, myRooms],
+  [roomMessages, roomMembers, roomHasMore, roomLoadingOlder, roomHasNewer, roomLoadingNewer, roomSearch, connectionStatus, isConnected, nickname, myRooms, roomImageResult],
   () => {
     broadcastAllRooms();
     syncTauriRoomTitles();

@@ -1,5 +1,5 @@
 import { emit, listen } from "@tauri-apps/api/event";
-import type { ChatMessage, ChatUser, RoomSearchState } from "./types/chat";
+import type { ChatAttachment, ChatMessage, ChatUser, RoomSearchState } from "./types/chat";
 
 /**
  * 메인 창 ↔ 채팅방 창 간 이벤트 버스.
@@ -38,6 +38,12 @@ export interface RoomStatePayload {
   loadingNewer?: boolean;
   /** 메시지 검색 상태. 없으면 검색 중이 아님 */
   search?: RoomSearchState | null;
+  /** 방 인원수 (단체방 이미지 변경 가능 여부 판단). 없으면 0 */
+  memberCount?: number;
+  /** 단체방 이미지 (null = 기본 이미지) */
+  roomImage?: ChatAttachment | null;
+  /** 이 방에 대한 마지막 room_image_set 결과 (seq로 응답 구분) */
+  roomImageResult?: { seq: number; ok: boolean; text: string } | null;
 }
 
 export type ChatBusMessage =
@@ -51,6 +57,8 @@ export type ChatBusMessage =
   | { kind: "room-send-file"; roomId: number; fileId: string; id: string; mainId?: string }
   // 번호방 채팅창 → 메인: 방제목 수정 요청 (소켓은 메인 창에만 있으므로 경유)
   | { kind: "room-rename"; roomId: number; title: string; mainId?: string }
+  // 번호방 채팅창 → 메인: 단체방 이미지 변경/초기화 (fileId=null 이면 초기화, 업로드는 채팅창이 직접)
+  | { kind: "room-image-set"; roomId: number; fileId: string | null; mainId?: string }
   // 번호방 채팅창 → 메인: 초대 요청 (소켓은 메인 창에만 있으므로 경유)
   | { kind: "room-invite"; roomId: number; memberNos: number[]; mainId?: string }
   // 번호방 채팅창 → 메인: 이전 대화 더보기 요청 (위로 스크롤 끝에 닿았을 때)

@@ -3,10 +3,13 @@ import { computed, onBeforeUnmount, ref } from "vue";
 import type { RoomInfo } from "../types/chat";
 import {
   formatRoomTime,
+  isOneToOneRoom,
   roomDisplayName,
+  roomImageOf,
   roomLastMessagePreview,
   roomRawName,
 } from "../types/chat";
+import ProfileAvatar from "./ProfileAvatar.vue";
 
 const props = defineProps<{
   rooms: RoomInfo[];
@@ -189,7 +192,12 @@ onBeforeUnmount(() => {
         @dblclick="$emit('open-room', room.roomId)"
         @contextmenu.prevent="openRoomMenuFromContext(room.roomId, $event)"
       >
-        <span class="room-id">#{{ room.roomId }}</span>
+        <ProfileAvatar
+          :image="roomImageOf(room)"
+          :group="!isOneToOneRoom(room)"
+          :size="42"
+          :title="`#${room.roomId}`"
+        />
         <span class="room-main">
           <span class="room-name">{{ roomDisplayName(room) }}</span>
           <span v-if="roomLastMessagePreview(room, props.myNickname)" class="room-preview">
@@ -277,7 +285,6 @@ onBeforeUnmount(() => {
 /* 안읽은 메시지가 있는 방: 살짝 진한 배경으로 목록에서 눈에 띈다 */
 .room-item.unread { background: #fff8f8; }
 .room-item.unread:hover { background: #ffecec; }
-.room-id { font-weight: bold; color: #007bff; min-width: 44px; }
 .room-main { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .room-name { font-size: 15px; font-weight: 600; word-break: break-all; }
 /* 마지막 메시지 미리보기: 한 줄 고정 + 말줄임 */
