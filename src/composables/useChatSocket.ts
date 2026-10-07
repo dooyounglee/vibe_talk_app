@@ -477,7 +477,10 @@ const handleIncoming = (raw: string) => {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
     const from = String(data.from ?? data.nickname ?? "");
-    const fromNo = Number(userNoOf(data as unknown) ?? 0);
+    // 서버는 실시간 메시지의 발신자 번호를 from_no 로 보낸다 (히스토리는 user_no)
+    const fromNo = Number(
+      toNo((data as { from_no?: unknown }).from_no) ?? userNoOf(data as unknown) ?? 0,
+    );
     const msg: ChatMessage = {
       type: "room",
       user_no: fromNo,
