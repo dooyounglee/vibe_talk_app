@@ -53,12 +53,15 @@ const {
   roomMessages,
   roomUnread,
   roomMembers,
+  roomHasMore,
+  roomLoadingOlder,
   findOneToOneRoomId,
   connect,
   manualReconnect,
   disconnect,
   requestOneToOneRoom,
   requestRoomHistory,
+  requestOlderMessages,
   clearRoomUnread,
   setRoomFocus,
   forgetRoomFocus,
@@ -243,6 +246,8 @@ const broadcastRoom = (roomId: number) => {
     users: [...userlist.value],
     connectionStatus: connectionStatus.value,
     isConnected: isConnected.value,
+    hasMore: roomHasMore.value[roomId] === true,
+    loadingOlder: roomLoadingOlder.value[roomId] === true,
     mainId,
   });
 };
@@ -430,7 +435,7 @@ onMounted(() => {
     if ("mainId" in msg && msg.mainId !== undefined && msg.mainId !== mainId) return;
     switch (msg.kind) {
       case "room-open": {
-        // 채팅창이 열릴 때마다 서버에 DB 최근 10건을 요청한다.
+        // 채팅창이 열릴 때마다 서버에 DB 최신 한 페이지를 요청한다.
         const firstOpen = !openRooms.has(msg.roomId);
         openRooms.add(msg.roomId);
         clearRoomUnread(msg.roomId);
@@ -456,6 +461,11 @@ onMounted(() => {
         // 소켓은 메인 창에만 있으므로 여기서 서버로 넘기고,
         // 서버가 my_rooms/history_room을 내려주면 대상자 화면이 갱신된다.
         sendRoomInvite(msg.roomId, msg.memberNos);
+        break;
+      case "room-load-older":
+        // 채팅방 창(팝업)에서 위로 스크롤해 요청한 이전 대화.
+        // 응답(history_room_older)이 오면 roomMessages watch가 열린 창에 스냅샷을 다시 보낸다.
+        requestOlderMessages(msg.roomId);
         break;
       case "room-send": {
         const key = dedupeKeyFor(msg);
@@ -558,7 +568,7 @@ onUnmounted(() => {
 
 // 방/연결 상태가 바뀌면 열려 있는 채팅방 창들에 스냅샷 브로드캐스트
 watch(
-  [roomMessages, roomMembers, connectionStatus, isConnected, nickname, myRooms],
+  [roomMessages, roomMembers, roomHasMore, roomLoadingOlder, connectionStatus, isConnected, nickname, myRooms],
   () => {
     broadcastAllRooms();
     syncTauriRoomTitles();

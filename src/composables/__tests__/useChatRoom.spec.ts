@@ -174,6 +174,29 @@ describe("useChatRoom — 새 창 (버스 모드)", () => {
     channel.close();
   });
 
+  it("loadOlder는 메인 창에 room-load-older를 넘기고, 응답 전까지 중복 요청하지 않는다", async () => {
+    const { channel, received } = openMainChannel();
+    const { room } = await mountRoom(3);
+    channel.postMessage(roomState({ hasMore: false }));
+    await vi.waitFor(() => expect(room.linked.value).toBe(true));
+    expect(room.loadOlder()).toBe(false);
+    channel.postMessage(roomState({ hasMore: true }));
+    await vi.waitFor(() => expect(room.hasMore.value).toBe(true));
+    expect(room.loadOlder()).toBe(true);
+    expect(room.loadingOlder.value).toBe(true);
+    expect(room.loadOlder()).toBe(false);
+    await vi.waitFor(() =>
+      expect(received.filter((m) => m.kind === "room-load-older")).toEqual([
+        { kind: "room-load-older", roomId: 3, mainId: "main-1" },
+      ]),
+    );
+    // 메인 창이 응답을 반영한 스냅샷을 보내면 loading 이 풀린다
+    channel.postMessage(roomState({ hasMore: false, loadingOlder: false }));
+    await vi.waitFor(() => expect(room.loadingOlder.value).toBe(false));
+    expect(room.hasMore.value).toBe(false);
+    channel.close();
+  });
+
   it("main-closing을 받으면 연결 끊김 상태가 된다", async () => {
     const { channel } = openMainChannel();
     const { room } = await mountRoom(3);

@@ -381,6 +381,68 @@ describe("보내는 액션", () => {
   });
 });
 
+describe("이전 대화 더보기 (msgId 커서)", () => {
+  const page = (ids: number[]) => ids.map((id) => ({ user_no: 11, text: `m${id}`, msgId: id }));
+  const textsOf = (store: Store, roomId: number) =>
+    (store.roomMessages.value[roomId] ?? []).map((m) => m.text);
+
+  it("history_room 의 hasMore 를 저장하고, 가장 오래된 msgId 를 커서로 요청한다", async () => {
+    const { store, ws } = await connectedStore();
+    ws.receive({ type: "history_room", roomId: 5, messages: page([31, 32, 33]), hasMore: true });
+    expect(store.roomHasMore.value[5]).toBe(true);
+    expect(store.requestOlderMessages(5)).toBe(true);
+    expect(ws.sentJson()).toEqual([{ type: "room_history_older", roomId: 5, beforeId: 31 }]);
+    expect(store.roomLoadingOlder.value[5]).toBe(true);
+  });
+
+  it("불러오는 중에는 중복 요청하지 않는다", async () => {
+    const { store, ws } = await connectedStore();
+    ws.receive({ type: "history_room", roomId: 5, messages: page([31, 32]), hasMore: true });
+    expect(store.requestOlderMessages(5)).toBe(true);
+    expect(store.requestOlderMessages(5)).toBe(false);
+    expect(ws.sentJson()).toHaveLength(1);
+  });
+
+  it("hasMore 가 false 면 요청하지 않는다", async () => {
+    const { store, ws } = await connectedStore();
+    ws.receive({ type: "history_room", roomId: 5, messages: page([1, 2]), hasMore: false });
+    expect(store.requestOlderMessages(5)).toBe(false);
+    // hasMore 필드가 없는 구버전 응답도 더 없음으로 본다
+    ws.receive({ type: "history_room", roomId: 6, messages: page([1, 2]) });
+    expect(store.requestOlderMessages(6)).toBe(false);
+    expect(ws.sentJson()).toEqual([]);
+  });
+
+  it("history_room_older 는 앞에 붙이고 중복 msgId 는 버린다", async () => {
+    const { store, ws } = await connectedStore();
+    ws.receive({ type: "history_room", roomId: 5, messages: page([31, 32]), hasMore: true });
+    store.requestOlderMessages(5);
+    ws.receive({ type: "history_room_older", roomId: 5, beforeId: 31, messages: page([29, 30, 31]), hasMore: false });
+    expect(textsOf(store, 5)).toEqual(["m29", "m30", "m31", "m32"]);
+    expect(store.roomHasMore.value[5]).toBe(false);
+    expect(store.roomLoadingOlder.value[5]).toBe(false);
+  });
+
+  it("응답 대기 중 목록이 새로 덮어써졌으면 이어 붙이지 않는다", async () => {
+    const { store, ws } = await connectedStore();
+    ws.receive({ type: "history_room", roomId: 5, messages: page([31, 32]), hasMore: true });
+    store.requestOlderMessages(5);
+    ws.receive({ type: "history_room", roomId: 5, messages: page([40, 41]), hasMore: true });
+    ws.receive({ type: "history_room_older", roomId: 5, beforeId: 31, messages: page([29, 30]), hasMore: true });
+    expect(textsOf(store, 5)).toEqual(["m40", "m41"]);
+    expect(store.roomLoadingOlder.value[5]).toBe(false);
+  });
+
+  it("연결이 끊기면 불러오는 중 표시를 푼다", async () => {
+    const { store, ws } = await connectedStore();
+    ws.receive({ type: "history_room", roomId: 5, messages: page([31]), hasMore: true });
+    store.requestOlderMessages(5);
+    vi.useFakeTimers();
+    ws.close();
+    expect(store.roomLoadingOlder.value[5]).toBeUndefined();
+  });
+});
+
 describe("requestOneToOneRoom", () => {
   it("room_opened를 받으면 방 번호로 resolve한다", async () => {
     const { store, ws } = await connectedStore();

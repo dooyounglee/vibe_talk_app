@@ -28,6 +28,7 @@ const roomTitle = computed(() =>
 const {
   messages, myUserNo, myNickname, roomName, connectionStatus,
   isConnected, hasSession, members, users, send, renameRoom, invite, announceClose,
+  hasMore, loadingOlder, loadOlder,
 } = useChatRoom(roomId);
 
 // 상단 연필 → 방제목 변경 모달
@@ -128,7 +129,10 @@ const goHome = () => {
     :connection-status="connectionStatus"
     :is-connected="isConnected"
     :members="members"
+    :has-more="hasMore"
+    :loading-older="loadingOlder"
     @send="handleSend"
+    @load-older="loadOlder"
     @close="handleClose"
   >
     <template #header-actions>

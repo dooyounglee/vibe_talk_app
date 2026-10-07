@@ -12,7 +12,8 @@ describe("로그인", () => {
   it("admin으로 입장하면 메인 화면이 뜬다", async () => {
     await expect($(".nickname-screen")).toBeDisplayed();
 
-    await $(".nickname-input").setValue("admin");
+    // 비밀번호 칸도 nickname-input 클래스를 함께 쓰므로 아이디 칸만 고른다
+    await $(".nickname-input:not(.password-input)").setValue("admin");
     // 서버는 아직 비밀번호를 검사하지 않는다 (화면에서만 필수 입력)
     await $(".password-input").setValue("admin");
     await $(".start-button").click();

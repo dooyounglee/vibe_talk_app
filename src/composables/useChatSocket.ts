@@ -103,6 +103,9 @@ const myRooms = ref<Array<RoomInfo>>([]);
 const roomMessages = ref<Record<number, Array<ChatMessage>>>({});
 const roomUnread = ref<Record<number, number>>({});
 const roomMembers = ref<Record<number, Array<ChatUser>>>({});
+// 이전 대화 더보기 (msgId 커서 페이징): 방별로 더 불러올 이전 대화가 있는지 / 불러오는 중인지
+const roomHasMore = ref<Record<number, boolean>>({});
+const roomLoadingOlder = ref<Record<number, boolean>>({});
 // 1:1 대화에 대응하는 방 번호를 찾는다.
 // (1:1 방의 displayName은 상대 닉네임이므로 매칭할 수 있다)
 // '사용자' 탭에서 상대를 눌러 이미 만들어진 방으로 바로 열기 위한 조회다.
@@ -139,7 +142,8 @@ const oneToOnePeerOfRoom = (roomId: number): string | null => {
 
 // 채팅창 열람 시 서버에 최신 내역을 요청하는 플래그/가드 없이
 // 서버가 내려준 history_room은 항상 해당 박스를 덮어쓴다.
-// (접속 시 일괄 푸시를 제거하고, 창을 열 때마다 DB에서 최근 10건을 조회해 오기 때문)
+// (접속 시 일괄 푸시를 제거하고, 창을 열 때마다 DB에서 최신 한 페이지를 조회해 오기 때문)
+// 그보다 이전 대화는 history_room_older 로 받아 배열 앞에 붙인다.
 
 // WebSocket 인스턴스 (윈도우당 1개)
 let ws: WebSocket | null = null;
@@ -220,6 +224,23 @@ interface HistoryEntry {
   unreadCount?: number;
 }
 
+// 서버 히스토리 항목(history_room / history_room_older) → ChatMessage
+const toRoomHistory = (roomId: number, messages: unknown): Array<ChatMessage> =>
+  (Array.isArray(messages) ? (messages as Array<HistoryEntry>) : []).map((msg) => ({
+    type: "room",
+    user_no: Number(userNoOf(msg) ?? 0),
+    nickname: String(msg?.nickname ?? ""),
+    text: String(msg?.text ?? ""),
+    timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
+    roomId,
+    // 읽음 숫자 재계산용 id. 서버는 msgId 로 주지만, 구버전 payload 는 id 만 준다.
+    // 둘 다 없으면 숫자를 재계산할 수 없으므로 undefined 로 둔다
+    // (applyReadAck 가 이 경우 기존 숫자를 보존한다).
+    msgId: readMsgId(msg),
+    unreadCount:
+      typeof msg?.unreadCount === "number" ? msg.unreadCount : 0,
+  }));
+
 interface IncomingPayload {
   type?: string;
   user_no?: number;
@@ -260,6 +281,10 @@ interface IncomingPayload {
   unreadCount?: number;
   // read_ack: 그 대화의 참여자별 마지막 읽음 위치
   cursors?: Record<string, number>;
+  // history_room / history_room_older: 더 이전 대화가 있는지
+  hasMore?: boolean;
+  // history_room_older: 요청했던 커서 (응답이 현재 목록에 이어 붙일 수 있는지 확인용)
+  beforeId?: number;
 }
 
 // user_no 판정용
@@ -443,25 +468,12 @@ const handleIncoming = (raw: string) => {
   } else if (data.type === "history_room") {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
-    const history: Array<ChatMessage> = (
-      Array.isArray(data.messages) ? data.messages : []
-    ).map((msg) => ({
-      type: "room",
-      user_no: Number(userNoOf(msg) ?? 0),
-      nickname: String(msg?.nickname ?? ""),
-      text: String(msg?.text ?? ""),
-      timestamp: typeof msg?.timestamp === "number" ? msg.timestamp : undefined,
-      roomId,
-      // 읽음 숫자 재계산용 id. 서버는 msgId 로 주지만, 구버전 payload 는 id 만 준다.
-      // 둘 다 없으면 숫자를 재계산할 수 없으므로 undefined 로 둔다
-      // (applyReadAck 가 이 경우 기존 숫자를 보존한다).
-      msgId: readMsgId(msg),
-      unreadCount:
-        typeof msg?.unreadCount === "number" ? msg.unreadCount : 0,
-    }));
-    // NOTE: 채팅창을 열 때마다 서버가 보내는 DB 최신 내역(10건)으로 항상 덮어쓴다.
-    // (접속 시 일괄 푸시 제거 + 창 열람 시 새로 조회)
+    const history = toRoomHistory(roomId, data.messages);
+    // NOTE: 채팅창을 열 때마다 서버가 보내는 DB 최신 한 페이지로 항상 덮어쓴다.
+    // (접속 시 일괄 푸시 제거 + 창 열람 시 새로 조회. 앞서 불러온 이전 대화도 이때 비워진다)
     roomMessages.value[roomId] = history;
+    roomHasMore.value[roomId] = data.hasMore === true;
+    roomLoadingOlder.value[roomId] = false;
     // 방을 열면 참여자 목록도 함께 온다 → 읽음 숫자 실시간 재계산에 쓴다.
     // (이게 없으면 read_ack 를 받았을 때 숫자가 0으로 잘못 계산되어 한 번에 사라진다)
     if (Array.isArray(data.memberProfiles)) {
@@ -473,6 +485,21 @@ const handleIncoming = (raw: string) => {
         .map((m) => ({ user_no: Number(userNoOf(m) ?? 0), nickname: "" }))
         .filter((m) => m.user_no > 0);
     }
+  } else if (data.type === "history_room_older") {
+    const roomId = Number(data.roomId);
+    if (!Number.isInteger(roomId)) return;
+    roomLoadingOlder.value[roomId] = false;
+    roomHasMore.value[roomId] = data.hasMore === true;
+    const box = ensureRoomBox(roomId);
+    // 응답 대기 중 history_room 으로 박스가 새로 덮어써졌다면,
+    // 요청 기준(beforeId)과 현재 맨 앞 메시지가 달라 이어 붙이면 순서가 꼬인다 → 버린다.
+    const head = box.find((m) => typeof m.msgId === "number");
+    if (head && Number(data.beforeId) !== head.msgId) return;
+    const known = new Set(box.map((m) => m.msgId).filter((id) => typeof id === "number"));
+    const older = toRoomHistory(roomId, data.messages).filter(
+      (m) => m.msgId === undefined || !known.has(m.msgId),
+    );
+    if (older.length > 0) roomMessages.value[roomId] = [...older, ...box];
   } else if (data.type === "room_message") {
     const roomId = Number(data.roomId);
     if (!Number.isInteger(roomId)) return;
@@ -684,6 +711,8 @@ const attachHandlers = (socket: WebSocket) => {
   };
   socket.onclose = () => {
     isConnected.value = false;
+    // 응답을 못 받은 "이전 대화 불러오는 중" 표시가 남지 않게 푼다
+    roomLoadingOlder.value = {};
     if (isManuallyDisconnected.value) {
       connectionStatus.value = "연결 끊김";
       return;
@@ -813,13 +842,28 @@ const sendRoom = (roomId: number, text: string): boolean => {
   return true;
 };
 
-// ─── 채팅창 열람: DB 최근 10건 조회 요청 ───
-// 채팅창이 열릴 때마다 호출하며, 서버는 history_room으로 최근 10건을 내려준다
+// ─── 채팅창 열람: DB 최신 한 페이지 조회 요청 ───
+// 채팅창이 열릴 때마다 호출하며, 서버는 history_room으로 최신 한 페이지(30건)를 내려준다
 // (수신 시 해당 박스를 덮어쓴다). 1:1도 방이므로 같은 경로를 쓴다.
 const requestRoomHistory = (roomId: number): boolean => {
   if (!Number.isInteger(roomId) || roomId <= 0) return false;
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   ws.send(JSON.stringify({ type: "room_history", roomId }));
+  return true;
+};
+
+// ─── 채팅창 이전 대화 더보기 ───
+// 지금 들고 있는 가장 오래된 msgId 를 커서(beforeId)로 보내면
+// 서버가 history_room_older 로 그 이전 한 페이지를 내려준다 (수신 시 배열 앞에 붙인다).
+// 불러오는 중이거나 더 이전 대화가 없으면 보내지 않는다.
+const requestOlderMessages = (roomId: number): boolean => {
+  if (!Number.isInteger(roomId) || roomId <= 0) return false;
+  if (roomLoadingOlder.value[roomId] || roomHasMore.value[roomId] !== true) return false;
+  const oldest = (roomMessages.value[roomId] ?? []).find((m) => typeof m.msgId === "number");
+  if (!oldest?.msgId) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "room_history_older", roomId, beforeId: oldest.msgId }));
+  roomLoadingOlder.value[roomId] = true;
   return true;
 };
 
@@ -883,6 +927,8 @@ const connect = (loginIdInput: string): boolean => {
     roomMessages.value = {};
     roomUnread.value = {};
     roomMembers.value = {};
+    roomHasMore.value = {};
+    roomLoadingOlder.value = {};
   }
   // 안읽은 건수는 서버 DB가 진실이므로 여기서 복원하지 않는다.
   roomUnread.value = {};
@@ -1049,6 +1095,8 @@ export function useChatSocket() {
     roomMessages,
     roomUnread,
     roomMembers,
+    roomHasMore,
+    roomLoadingOlder,
     findOneToOneRoomId,
     oneToOnePeerOfRoom,
     // 채팅창 focus 상태 (안읽은 건수를 잡지 않을 대상 판정용)
@@ -1071,6 +1119,7 @@ export function useChatSocket() {
     sendRoom,
     requestOneToOneRoom,
     requestRoomHistory,
+    requestOlderMessages,
     upsertUser,
     renameUser,
   };

@@ -7,8 +7,9 @@ import RenameRoomModal from "../RenameRoomModal.vue";
 import CloseConfirmModal from "../CloseConfirmModal.vue";
 import UserSearchInput from "../UserSearchInput.vue";
 import NicknameView from "../NicknameView.vue";
+import ChatWindow from "../ChatWindow.vue";
 import { AUTO_LOGIN_STORAGE_KEY, SAVED_LOGIN_STORAGE_KEY } from "../../constants";
-import { ROOM_TITLE_INPUT_MAX_LENGTH, type ChatUser } from "../../types/chat";
+import { ROOM_TITLE_INPUT_MAX_LENGTH, type ChatMessage, type ChatUser } from "../../types/chat";
 
 /** 배열의 마지막 원소 (tsconfig lib이 ES2020이라 Array.prototype.at을 쓰지 않는다) */
 const last = <T>(list: T[] | undefined): T | undefined => list?.[list.length - 1];
@@ -27,6 +28,116 @@ describe("MessageInput", () => {
   it("빈 값이면 전송 버튼이 비활성화된다", () => {
     const wrapper = mount(MessageInput, { props: { modelValue: "" } });
     expect(wrapper.get("button").attributes("disabled")).toBeDefined();
+  });
+});
+
+describe("ChatWindow 이전 대화 더보기", () => {
+  const ROW_PX = 30;
+  const CLIENT_PX = 100;
+  const msgs = (from: number, to: number, userNo = 11): ChatMessage[] =>
+    Array.from({ length: to - from + 1 }, (_, i) => ({
+      type: "room", user_no: userNo, nickname: "영희", text: `m${from + i}`, msgId: from + i,
+    }));
+  const baseProps = {
+    peer: "#5 스터디", myUserNo: 10, myNickname: "철수",
+    connectionStatus: "연결됨", isConnected: true,
+  };
+  /** jsdom 은 레이아웃이 없으므로 메시지 수 × 30px 로 스크롤 높이를 흉내낸다 */
+  const fakeGeometry = (el: HTMLElement, count: () => number) => {
+    let top = 0;
+    Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => count() * ROW_PX });
+    Object.defineProperty(el, "clientHeight", { configurable: true, get: () => CLIENT_PX });
+    Object.defineProperty(el, "scrollTop", {
+      configurable: true, get: () => top, set: (v: number) => { top = v; },
+    });
+  };
+  const flush = async () => {
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+  };
+
+  it("맨 위 근처로 스크롤하면 load-older, 앞에 붙으면 보던 위치를 유지한다", async () => {
+    const wrapper = mount(ChatWindow, { props: { ...baseProps, messages: msgs(21, 30), hasMore: false } });
+    const body = wrapper.get(".chat-body").element as HTMLElement;
+    fakeGeometry(body, () => wrapper.props("messages").length);
+    await wrapper.setProps({ hasMore: true });
+
+    body.scrollTop = 10;
+    await wrapper.get(".chat-body").trigger("scroll");
+    expect(wrapper.emitted("load-older")).toHaveLength(1);
+    // 응답 전 다시 스크롤해도 중복 요청하지 않는다
+    await wrapper.setProps({ loadingOlder: true });
+    expect(wrapper.text()).toContain("이전 대화를 불러오는 중");
+    await wrapper.get(".chat-body").trigger("scroll");
+    expect(wrapper.emitted("load-older")).toHaveLength(1);
+
+    // 10건이 앞에 붙음: 높이 300 → 600, 위치 10 → 310 (같은 메시지를 계속 보고 있음)
+    await wrapper.setProps({ messages: [...msgs(11, 20), ...msgs(21, 30)], loadingOlder: false, hasMore: false });
+    await flush();
+    expect(body.scrollTop).toBe(310);
+    expect(wrapper.text()).toContain("대화의 시작입니다");
+
+    // 위쪽을 읽는 중에 상대 메시지가 오면 끌어내리지 않는다
+    await wrapper.setProps({ messages: [...msgs(11, 30), ...msgs(31, 31)] });
+    await flush();
+    expect(body.scrollTop).toBe(310);
+    // 내가 보낸 메시지는 맨 아래로
+    await wrapper.setProps({ messages: [...msgs(11, 31), ...msgs(32, 32, 10)] });
+    await flush();
+    expect(body.scrollTop).toBe(22 * ROW_PX);
+  });
+
+  it("이전 대화를 보는 중 상대 메시지가 오면 '새 메시지(n)', 누르면 맨 아래로 간다", async () => {
+    const wrapper = mount(ChatWindow, { props: { ...baseProps, messages: msgs(1, 20) } });
+    const body = wrapper.get(".chat-body").element as HTMLElement;
+    fakeGeometry(body, () => wrapper.props("messages").length);
+    await flush();
+    expect(wrapper.find(".jump-btn").exists()).toBe(false);
+
+    // 위로 올려 이전 대화를 보는 중 → '맨 아래로' 버튼
+    body.scrollTop = 100;
+    await wrapper.get(".chat-body").trigger("scroll");
+    expect(wrapper.find(".to-bottom-btn").exists()).toBe(true);
+
+    // 상대 메시지 2건(따로따로) + 1건 도착 → 위치 유지, 새 메시지(3)
+    await wrapper.setProps({ messages: msgs(1, 21) });
+    await wrapper.setProps({ messages: msgs(1, 23) });
+    await flush();
+    expect(body.scrollTop).toBe(100);
+    expect(wrapper.get(".new-msg-btn").text()).toContain("새 메시지(3)");
+    expect(wrapper.find(".to-bottom-btn").exists()).toBe(false);
+
+    // 누르면 맨 아래로 내려가고 버튼이 사라진다
+    await wrapper.get(".new-msg-btn").trigger("click");
+    await flush();
+    expect(body.scrollTop).toBe(23 * ROW_PX);
+    expect(wrapper.find(".jump-btn").exists()).toBe(false);
+  });
+
+  it("'맨 아래로' 버튼은 가장 최근 메시지로 이동하고, 직접 바닥까지 내려도 사라진다", async () => {
+    const wrapper = mount(ChatWindow, { props: { ...baseProps, messages: msgs(1, 20) } });
+    const body = wrapper.get(".chat-body").element as HTMLElement;
+    fakeGeometry(body, () => wrapper.props("messages").length);
+    await flush();
+    body.scrollTop = 0;
+    await wrapper.get(".chat-body").trigger("scroll");
+    await wrapper.get(".to-bottom-btn").trigger("click");
+    await flush();
+    expect(body.scrollTop).toBe(20 * ROW_PX);
+    expect(wrapper.find(".jump-btn").exists()).toBe(false);
+
+    // 다시 올라갔다가 손으로 바닥 근처까지 내리면 버튼이 사라진다
+    body.scrollTop = 0;
+    await wrapper.get(".chat-body").trigger("scroll");
+    expect(wrapper.find(".to-bottom-btn").exists()).toBe(true);
+    body.scrollTop = 20 * ROW_PX - CLIENT_PX;
+    await wrapper.get(".chat-body").trigger("scroll");
+    expect(wrapper.find(".jump-btn").exists()).toBe(false);
+  });
+
+  it("내용이 짧아 스크롤바가 없으면 열자마자 이전 대화를 요청한다", async () => {
+    const wrapper = mount(ChatWindow, { props: { ...baseProps, messages: msgs(1, 2), hasMore: true } });
+    await flush();
+    expect(wrapper.emitted("load-older")).toHaveLength(1);
   });
 });
 

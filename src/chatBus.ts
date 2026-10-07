@@ -26,6 +26,10 @@ export interface RoomStatePayload {
   users: ChatUser[];
   connectionStatus: string;
   isConnected: boolean;
+  /** 더 불러올 이전 대화가 있는지 (위로 스크롤 무한로딩). 없으면 false 로 본다 */
+  hasMore?: boolean;
+  /** 이전 대화를 불러오는 중인지. 없으면 false 로 본다 */
+  loadingOlder?: boolean;
 }
 
 export type ChatBusMessage =
@@ -39,6 +43,8 @@ export type ChatBusMessage =
   | { kind: "room-rename"; roomId: number; title: string; mainId?: string }
   // 번호방 채팅창 → 메인: 초대 요청 (소켓은 메인 창에만 있으므로 경유)
   | { kind: "room-invite"; roomId: number; memberNos: number[]; mainId?: string }
+  // 번호방 채팅창 → 메인: 이전 대화 더보기 요청 (위로 스크롤 끝에 닿았을 때)
+  | { kind: "room-load-older"; roomId: number; mainId?: string }
   // 메인 → 채팅창
   | ({ kind: "room-state" } & RoomStatePayload & { mainId?: string })
   | { kind: "main-ready"; mainId?: string }

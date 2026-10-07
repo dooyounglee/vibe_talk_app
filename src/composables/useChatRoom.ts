@@ -34,6 +34,8 @@ export function useChatRoom(roomId: { readonly value: number }) {
   const busRoomName = ref("");
   const busConnectionStatus = ref("메인 창에 연결 중...");
   const busIsConnected = ref(false);
+  const busHasMore = ref(false);
+  const busLoadingOlder = ref(false);
   const linked = ref(false);
   let bus: (ChatBus & { add: (b: ChatBus | null) => void }) | null = null;
   let busClosed = false;
@@ -48,6 +50,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
   const applyState = (
     userNo: number | null, nick: string, rname: string, msgs: ChatMessage[],
     mems: ChatUser[], status: string, connected: boolean, users: ChatUser[] = [],
+    hasMore = false, loadingOlder = false,
   ) => {
     busUserNo.value = userNo;
     busNickname.value = nick;
@@ -57,6 +60,8 @@ export function useChatRoom(roomId: { readonly value: number }) {
     busUsers.value = [...users];
     busConnectionStatus.value = status;
     busIsConnected.value = connected;
+    busHasMore.value = hasMore;
+    busLoadingOlder.value = loadingOlder;
     linked.value = true;
     stopAnnounceTimer();
     if (linkTimer) {
@@ -114,6 +119,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
         msg.myUserNo, msg.myNickname, msg.roomName, msg.messages,
         msg.members, msg.connectionStatus, msg.isConnected,
         Array.isArray(msg.users) ? msg.users : [],
+        msg.hasMore === true, msg.loadingOlder === true,
       );
     } else if (msg.kind === "main-ready") {
       announceOpen();
@@ -179,6 +185,16 @@ export function useChatRoom(roomId: { readonly value: number }) {
   const isConnected: ComputedRef<boolean> = computed(() =>
     direct.value ? store.isConnected.value : busIsConnected.value,
   );
+  const hasMore: ComputedRef<boolean> = computed(() =>
+    direct.value
+      ? store.roomHasMore.value[effectiveRoomId.value] === true
+      : busHasMore.value,
+  );
+  const loadingOlder: ComputedRef<boolean> = computed(() =>
+    direct.value
+      ? store.roomLoadingOlder.value[effectiveRoomId.value] === true
+      : busLoadingOlder.value,
+  );
   const hasSession: ComputedRef<boolean> = computed(() =>
     direct.value
       ? store.loginId.value.trim() !== ""
@@ -190,7 +206,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
   };
 
   // 같은 탭에서 라우트만 바뀌면 컴포넌트가 재사용되므로(언마운트 없음)
-  // 방이 바뀔 때마다 다시 DB 최근 10건을 조회한다.
+  // 방이 바뀔 때마다 다시 DB 최신 한 페이지를 조회한다.
   watch(effectiveRoomId, (rid) => {
     if (!direct.value || !rid) return;
     store.clearRoomUnread(rid);
@@ -200,7 +216,7 @@ export function useChatRoom(roomId: { readonly value: number }) {
   onMounted(() => {
     if (direct.value) {
       store.clearRoomUnread(effectiveRoomId.value);
-      // 채팅창이 열릴 때마다 DB에서 최근 10건을 조회해 오도록 요청
+      // 채팅창이 열릴 때마다 DB에서 최신 한 페이지를 조회해 오도록 요청
       store.requestRoomHistory(effectiveRoomId.value);
       return;
     }
@@ -305,8 +321,27 @@ export function useChatRoom(roomId: { readonly value: number }) {
     }
   };
 
+  // 이전 대화 더보기 (위로 스크롤 끝). 같은 탭이면 직접, 새 창이면 메인 창에 버스로 요청한다.
+  // 새 창은 응답 스냅샷(room-state)이 올 때까지 중복 요청하지 않도록 먼저 loading 으로 표시한다.
+  const loadOlder = (): boolean => {
+    const target = effectiveRoomId.value;
+    if (!target) return false;
+    if (direct.value) return store.requestOlderMessages(target);
+    if (!linked.value || !busHasMore.value || busLoadingOlder.value) return false;
+    try {
+      bus?.post({ kind: "room-load-older", roomId: target, mainId: myMainId ?? undefined });
+    } catch {
+      return false;
+    }
+    busLoadingOlder.value = true;
+    return true;
+  };
+
   return {
     messages,
+    hasMore,
+    loadingOlder,
+    loadOlder,
     myUserNo,
     myNickname,
     roomName: rname,
