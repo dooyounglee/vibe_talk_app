@@ -85,6 +85,7 @@ export interface UserDetail {
   userName?: string | null;
   isDeleted: boolean;
   deptNo?: number | null;
+  profileImage?: ChatAttachment | null;
 }
 const usersDetail = ref<Array<UserDetail>>([]);
 // depts: admin 전용 부서 목록(미사용 포함 + 소속 인원수) — '설정 > 부서관리'용
@@ -331,6 +332,14 @@ const nickOf = (u: unknown): string => {
   }
   return "";
 };
+// 서버 memberProfiles 항목 → ChatUser (프로필 사진은 채팅창 상대 메시지 옆에 표시)
+const memberOf = (u: unknown): ChatUser => ({
+  user_no: Number(userNoOf(u) ?? 0),
+  nickname: nickOf(u),
+  profileImage: u && typeof u === "object"
+    ? toChatAttachment((u as Record<string, unknown>).profileImage) ?? null
+    : null,
+});
 
 const pruneRooms = () => {
   const alive = new Set(myRooms.value.map((r) => r.roomId));
@@ -369,11 +378,11 @@ const handleIncoming = (raw: string) => {
       resolve(roomId);
     }
   } else if (data.type === "userlist") {
-    // users = [{user_no, nickname}], onlineUsers = [user_no], userStatuses = {user_no: status}
+    // users = [{user_no, nickname, profileImage}], onlineUsers = [user_no], userStatuses = {user_no: status}
     const users: Array<ChatUser> = Array.isArray(data.users) ? data.users : [];
     const online: Array<number> = Array.isArray(data.onlineUsers) ? data.onlineUsers : [];
     const clean = users
-      .map((u) => ({ user_no: Number(userNoOf(u) ?? 0), nickname: nickOf(u) }))
+      .map(memberOf)
       .filter((u) => u.user_no > 0 && u.nickname);
     userlist.value = clean.filter((u) => u.user_no !== myUserNo.value);
     onlineUsers.value = online.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0 && n !== myUserNo.value);
@@ -405,6 +414,7 @@ const handleIncoming = (raw: string) => {
           userName: typeof userName === "string" ? userName : null,
           isDeleted: Boolean(isDeleted),
           deptNo: d.deptNo == null ? null : Number(d.deptNo),
+          profileImage: toChatAttachment(d.profileImage) ?? null,
         };
       })
       .filter((d) => d.user_no > 0 && d.user_no !== myUserNo.value);
@@ -510,7 +520,7 @@ const handleIncoming = (raw: string) => {
     // (이게 없으면 read_ack 를 받았을 때 숫자가 0으로 잘못 계산되어 한 번에 사라진다)
     if (Array.isArray(data.memberProfiles)) {
       roomMembers.value[roomId] = data.memberProfiles
-        .map((m) => ({ user_no: Number(userNoOf(m) ?? 0), nickname: nickOf(m) }))
+        .map(memberOf)
         .filter((m) => m.user_no > 0);
     } else if (Array.isArray(data.members)) {
       roomMembers.value[roomId] = data.members
@@ -615,7 +625,7 @@ const handleIncoming = (raw: string) => {
     if (!Number.isInteger(roomId)) return;
     if (Array.isArray(data.memberProfiles)) {
       roomMembers.value[roomId] = data.memberProfiles
-        .map((m) => ({ user_no: Number(userNoOf(m) ?? 0), nickname: nickOf(m) }))
+        .map(memberOf)
         .filter((m) => m.user_no > 0);
     } else {
       roomMembers.value[roomId] = Array.isArray(data.members)

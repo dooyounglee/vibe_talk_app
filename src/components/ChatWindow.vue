@@ -6,6 +6,7 @@ import { splitHighlight } from "../utils/highlight";
 import { attachmentUrl, downloadAttachment } from "../utils/attachment";
 import { openImageWindow } from "../utils/imageWindow";
 import MessageSearchBar from "./MessageSearchBar.vue";
+import ProfileAvatar from "./ProfileAvatar.vue";
 import RoomMembersModal from "./RoomMembersModal.vue";
 
 const props = withDefaults(
@@ -230,6 +231,19 @@ const jumpToBottom = () => {
 
 const keyOf = (msg: ChatMessage | undefined) => msg?.msgId ?? msg;
 
+// ─── 카톡식 상대 메시지: 프로필 사진 + 닉네임 ───
+// 같은 사람이 연달아 보낸 메시지는 첫 메시지에만 사진/닉네임을 붙이고 나머지는 들여쓰기만 한다.
+const memberByNo = computed(() => new Map(props.members.map((m) => [m.user_no, m])));
+const isMine = (msg: ChatMessage) => msg.user_no === props.myUserNo;
+const startsGroup = (index: number) => {
+  const msg = props.messages[index];
+  const prev = props.messages[index - 1];
+  return !prev || prev.user_no !== msg?.user_no;
+};
+// 닉네임은 현재 참여자 목록 기준(변경 반영), 방을 나간 사람은 메시지에 남은 닉네임으로
+const senderName = (msg: ChatMessage) => memberByNo.value.get(msg.user_no)?.nickname || msg.nickname;
+const senderImage = (msg: ChatMessage) => memberByNo.value.get(msg.user_no)?.profileImage ?? null;
+
 // ─── 메시지 검색 (카톡식: 검색바 + ▲▼ 로 결과 순회) ───
 const searchOpen = ref(false);
 const searchKeyword = ref("");
@@ -451,74 +465,86 @@ watch(
             :key="msg.msgId ?? `local-${index}`"
             class="message-row"
             :class="[
-              msg.user_no === myUserNo ? 'row-self' : 'row-other',
-              { 'search-active': msg.msgId !== undefined && msg.msgId === activeMsgId },
+              isMine(msg) ? 'row-self' : 'row-other',
+              {
+                'row-continued': !startsGroup(index),
+                'search-active': msg.msgId !== undefined && msg.msgId === activeMsgId,
+              },
             ]"
             :data-msg-id="msg.msgId"
           >
-            <!-- 카톡식 읽음 표시: 아직 안 읽은 사람이 있으면 숫자를 붙인다.
-                 내 메시지(message-self)와 상대 메시지(message-other) 모두 붙는다.
-                 발신자를 제외한 미열람 인원이며, blur 중이면 '나'도 세어진다.
-                 (focus 하면 unread_clear → 읽음 커서가 앞서므로 자동으로 빠진다)
-                 예) 3명 방에서 A 발신 → B 채팅창 blur, C 미열람
-                     A/B 화면 '2'  →  B가 focus 하면 양쪽 '1' -->
-            <span
-              v-if="(msg.unreadCount ?? 0) > 0"
-              class="unread-count"
-              :title="`${msg.unreadCount}명이 아직 읽지 않았습니다`"
-            >{{ msg.unreadCount }}</span>
-            <div
-              class="bubble"
-              :class="msg.user_no === myUserNo ? 'message-self' : 'message-other'"
-            >
-              <div v-if="msg.file" class="message-content attachment">
-                <span class="nickname" v-if="msg.user_no !== myUserNo">
-                  [{{ msg.nickname }}]
-                </span>
-                <!-- 이미지: 바로 보이고 클릭하면 새 창에서 확대/축소 -->
-                <div v-if="isImageAttachment(msg.file)" class="att-image-wrap">
-                  <img
-                    class="att-image"
-                    :src="attachmentUrl(msg.file)"
-                    :alt="msg.file.name"
-                    :title="msg.file.name"
-                    loading="lazy"
-                    @click="openImage(msg.file)"
-                    @load="onImageLoad"
-                  />
-                  <button
-                    class="att-image-download"
-                    title="다운로드"
-                    aria-label="다운로드"
-                    @click.stop="download(msg.file)"
-                  >⬇</button>
-                </div>
-                <!-- 그 외 파일: 이름/크기 + 다운로드 -->
-                <button
-                  v-else
-                  class="att-file"
-                  :title="`${msg.file.name} 다운로드`"
-                  @click="download(msg.file)"
+            <!-- 상대 메시지: 왼쪽 프로필 사진 (연속 메시지는 같은 폭의 빈 자리로 정렬만 맞춘다) -->
+            <template v-if="!isMine(msg)">
+              <ProfileAvatar
+                v-if="startsGroup(index)"
+                class="sender-avatar"
+                :image="senderImage(msg)"
+                :size="38"
+              />
+              <span v-else class="sender-avatar-space" />
+            </template>
+            <div class="message-main">
+              <div v-if="!isMine(msg) && startsGroup(index)" class="sender-name">{{ senderName(msg) }}</div>
+              <div class="bubble-line">
+                <!-- 카톡식 읽음 표시: 아직 안 읽은 사람이 있으면 숫자를 붙인다.
+                     내 메시지(message-self)와 상대 메시지(message-other) 모두 붙는다.
+                     발신자를 제외한 미열람 인원이며, blur 중이면 '나'도 세어진다.
+                     (focus 하면 unread_clear → 읽음 커서가 앞서므로 자동으로 빠진다)
+                     예) 3명 방에서 A 발신 → B 채팅창 blur, C 미열람
+                         A/B 화면 '2'  →  B가 focus 하면 양쪽 '1' -->
+                <span
+                  v-if="(msg.unreadCount ?? 0) > 0"
+                  class="unread-count"
+                  :title="`${msg.unreadCount}명이 아직 읽지 않았습니다`"
+                >{{ msg.unreadCount }}</span>
+                <div
+                  class="bubble"
+                  :class="msg.user_no === myUserNo ? 'message-self' : 'message-other'"
                 >
-                  <span class="att-file-icon">📄</span>
-                  <span class="att-file-info">
-                    <span class="att-file-name">{{ msg.file.name }}</span>
-                    <span class="att-file-size">{{ formatFileSize(msg.file.size) }} · 다운로드</span>
-                  </span>
-                </button>
-              </div>
-              <div v-else class="message-content">
-                <span class="nickname" v-if="msg.user_no !== myUserNo">
-                  [{{ msg.nickname }}]
-                </span>
-                <!-- 검색어 하이라이트: v-html 없이 조각으로 나눠 <mark> 로 감싼다 -->
-                <template v-if="highlightKeyword">
-                  <template
-                    v-for="(seg, i) in splitHighlight(msg.text, highlightKeyword)"
-                    :key="i"
-                  ><mark v-if="seg.hit" class="search-hit">{{ seg.text }}</mark><template v-else>{{ seg.text }}</template></template>
-                </template>
-                <template v-else>{{ msg.text }}</template>
+                  <div v-if="msg.file" class="message-content attachment">
+                    <!-- 이미지: 바로 보이고 클릭하면 새 창에서 확대/축소 -->
+                    <div v-if="isImageAttachment(msg.file)" class="att-image-wrap">
+                      <img
+                        class="att-image"
+                        :src="attachmentUrl(msg.file)"
+                        :alt="msg.file.name"
+                        :title="msg.file.name"
+                        loading="lazy"
+                        @click="openImage(msg.file)"
+                        @load="onImageLoad"
+                      />
+                      <button
+                        class="att-image-download"
+                        title="다운로드"
+                        aria-label="다운로드"
+                        @click.stop="download(msg.file)"
+                      >⬇</button>
+                    </div>
+                    <!-- 그 외 파일: 이름/크기 + 다운로드 -->
+                    <button
+                      v-else
+                      class="att-file"
+                      :title="`${msg.file.name} 다운로드`"
+                      @click="download(msg.file)"
+                    >
+                      <span class="att-file-icon">📄</span>
+                      <span class="att-file-info">
+                        <span class="att-file-name">{{ msg.file.name }}</span>
+                        <span class="att-file-size">{{ formatFileSize(msg.file.size) }} · 다운로드</span>
+                      </span>
+                    </button>
+                  </div>
+                  <div v-else class="message-content">
+                    <!-- 검색어 하이라이트: v-html 없이 조각으로 나눠 <mark> 로 감싼다 -->
+                    <template v-if="highlightKeyword">
+                      <template
+                        v-for="(seg, i) in splitHighlight(msg.text, highlightKeyword)"
+                        :key="i"
+                      ><mark v-if="seg.hit" class="search-hit">{{ seg.text }}</mark><template v-else>{{ seg.text }}</template></template>
+                    </template>
+                    <template v-else>{{ msg.text }}</template>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -664,15 +690,44 @@ watch(
   font-size: 12px;
   text-align: center;
 }
-/* 한 줄(숫자 + 풍선)을 감싸는 행 — 내 줄은 오른쪽, 상대 줄은 왼쪽 */
+/* 한 행 — 내 줄은 오른쪽, 상대 줄은 왼쪽(프로필 사진 + 닉네임 + 풍선) */
 .message-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 75%;
+}
+.row-self { align-self: flex-end; }
+.row-other { align-self: flex-start; }
+/* 같은 사람의 연속 메시지는 간격을 좁힌다 (카톡처럼 한 묶음으로 보이게) */
+.row-continued { margin-top: -4px; }
+/* 상대 프로필 사진 / 연속 메시지의 빈 자리 (사진과 같은 폭) */
+.row-other .sender-avatar { border-radius: 38%; }
+.sender-avatar-space { width: 38px; flex-shrink: 0; }
+.message-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+.row-self .message-main { align-items: flex-end; }
+.sender-name {
+  margin: 1px 0 4px 2px;
+  font-size: 12px;
+  color: #555;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 숫자 + 풍선 한 줄 */
+.bubble-line {
   display: flex;
   align-items: flex-end;
   gap: 5px;
-  max-width: 75%;
+  max-width: 100%;
 }
-.row-self { align-self: flex-end; flex-direction: row; }
-.row-other { align-self: flex-start; }
+.bubble { min-width: 0; }
 /* 상대 메시지(message-other): 숫자를 풍선 오른쪽에 둔다 (카톡의 받은 메시지 표시) */
 .row-other .unread-count { order: 2; }
 /* 풍선 색상 — 내 메시지(초록) / 상대 메시지(흰색) */
@@ -701,10 +756,6 @@ watch(
 .message-content {
   word-break: break-word;
   font-size: 14px;
-}
-.nickname {
-  font-weight: bold;
-  margin-right: 4px;
 }
 /* 검색 버튼: 검색바가 열려 있으면 눌린 상태로 */
 .search-btn.active { background: rgba(255, 255, 255, 0.25); opacity: 1; }
@@ -825,7 +876,6 @@ watch(
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.9);
 }
-.attachment .nickname { display: block; margin-bottom: 4px; }
 .att-image-wrap { position: relative; display: inline-block; }
 .att-image {
   display: block;

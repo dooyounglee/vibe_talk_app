@@ -227,6 +227,38 @@ describe("splitHighlight", () => {
   });
 });
 
+describe("ChatWindow 상대 프로필 (카톡식)", () => {
+  it("상대 연속 메시지는 첫 메시지에만 프로필 사진과 닉네임을 붙이고, 내 메시지에는 붙이지 않는다", () => {
+    const members: ChatUser[] = [
+      { user_no: 10, nickname: "철수" },
+      { user_no: 11, nickname: "영희(변경)", profileImage: { id: "a".repeat(32), name: "p.png", size: 1, mime: "image/png" } },
+    ];
+    const wrapper = mount(ChatWindow, {
+      props: {
+        peer: "#5 스터디", myUserNo: 10, myNickname: "철수",
+        connectionStatus: "연결됨", isConnected: true, members,
+        messages: [
+          { type: "room", user_no: 11, nickname: "영희", text: "a", msgId: 1 },
+          { type: "room", user_no: 11, nickname: "영희", text: "b", msgId: 2 },
+          { type: "room", user_no: 10, nickname: "철수", text: "c", msgId: 3 },
+          { type: "room", user_no: 12, nickname: "나간사람", text: "d", msgId: 4 },
+        ],
+      },
+    });
+    const rows = wrapper.findAll(".message-row");
+    expect(rows[0]!.find(".sender-avatar img").exists()).toBe(true);
+    expect(rows[0]!.get(".sender-name").text()).toBe("영희(변경)");
+    expect(rows[1]!.find(".sender-avatar").exists()).toBe(false);
+    expect(rows[1]!.find(".sender-avatar-space").exists()).toBe(true);
+    expect(rows[1]!.find(".sender-name").exists()).toBe(false);
+    expect(rows[2]!.find(".sender-avatar").exists()).toBe(false);
+    expect(rows[2]!.find(".sender-name").exists()).toBe(false);
+    // 참여자 목록에 없으면 메시지의 닉네임 + 기본 이미지
+    expect(rows[3]!.get(".sender-name").text()).toBe("나간사람");
+    expect(rows[3]!.find(".sender-avatar .silhouette").exists()).toBe(true);
+  });
+});
+
 describe("MessageList", () => {
   it("내 메시지와 상대 메시지를 구분하고 상대 닉네임만 표시한다", () => {
     const wrapper = mount(MessageList, {

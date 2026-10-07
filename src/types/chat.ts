@@ -63,6 +63,8 @@ export function toChatAttachment(raw: unknown): ChatAttachment | undefined {
 export interface ChatUser {
   user_no: number;
   nickname: string;
+  /** 프로필 이미지 (사용자 목록·방 참여자 목록에서 내려온다, null/없음 = 기본 이미지) */
+  profileImage?: ChatAttachment | null;
 }
 
 /** 채팅창 메시지 검색 상태 (서버 room_search_result) */

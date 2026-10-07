@@ -143,8 +143,8 @@ describe("수신 메시지 처리", () => {
       userStatuses: { "11": "busy", "12": "meeting", "99": "이상한값" },
     });
     expect(store.userlist.value).toEqual([
-      { user_no: 11, nickname: "영희" },
-      { user_no: 12, nickname: "민수" },
+      { user_no: 11, nickname: "영희", profileImage: null },
+      { user_no: 12, nickname: "민수", profileImage: null },
     ]);
     expect(store.onlineUsers.value).toEqual([11]);
     expect(store.statusEmojiOf(11)).toBe("🥵");

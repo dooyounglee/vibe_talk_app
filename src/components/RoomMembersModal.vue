@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ChatUser } from "../types/chat";
+import ProfileAvatar from "./ProfileAvatar.vue";
 
 // 채팅방 참여자 목록 모달. 채팅창 상단 '참여자' 버튼에서 연다.
 const props = defineProps<{
@@ -33,7 +34,7 @@ const close = () => emit("close");
       <p v-if="members.length === 0" class="empty">참여자 정보를 불러오는 중입니다.</p>
       <ul v-else class="member-list">
         <li v-for="m in sortedMembers" :key="m.user_no" class="member-item">
-          <span class="avatar">{{ m.nickname.charAt(0) }}</span>
+          <ProfileAvatar :image="m.profileImage" :size="30" />
           <span class="name">{{ m.nickname }}</span>
           <span v-if="m.user_no === myUserNo" class="me-badge">나</span>
         </li>
@@ -86,18 +87,6 @@ const close = () => emit("close");
   font-size: 14px;
 }
 .member-item:last-child { border-bottom: none; }
-.avatar {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background: #e7f1ff;
-  color: #007bff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: bold;
-  flex-shrink: 0;
-}
 .name { flex: 1; word-break: break-all; }
 .me-badge {
   font-size: 11px;

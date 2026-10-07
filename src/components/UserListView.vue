@@ -4,6 +4,7 @@ import { MY_STATUS_EMOJI, MY_STATUS_OPTIONS, myStatusText } from "../types/chat"
 import type { ChatUser, Department, MyStatus } from "../types/chat";
 import type { UserDetail } from "../composables/useChatSocket";
 import UserSearchInput from "./UserSearchInput.vue";
+import ProfileAvatar from "./ProfileAvatar.vue";
 
 const props = defineProps<{
   myUserNo: number | null;
@@ -32,7 +33,7 @@ const emit = defineEmits<{
 // admin에게 보여줄 목록: 탈퇴 포함 전체, 일반 사용자는 users 그대로
 const displayUsers = computed(() => {
   if (props.isAdmin) return props.usersDetail;
-  return props.users.map((u) => ({ user_no: u.user_no, loginId: "", nickname: u.nickname, isDeleted: false }));
+  return props.users.map((u) => ({ user_no: u.user_no, loginId: "", nickname: u.nickname, isDeleted: false, profileImage: u.profileImage ?? null }));
 });
 
 // ─── 사용자 검색 (UserSearchInput 공통컴포넌트) ───
@@ -238,7 +239,7 @@ const closeDetailModal = () => {
         @contextmenu="(e) => onContextMenu(e, { user_no: u.user_no, nickname: u.nickname })"
         :title="u.nickname + '님과 1:1 채팅 / 우클릭: 메뉴'"
       >
-        <span class="avatar">{{ u.nickname.slice(0, 1) }}</span>
+        <ProfileAvatar :image="u.profileImage" :size="32" />
         <span class="name">{{ u.nickname }}</span>
         <span v-if="isAdmin && deptNameOf((u as UserDetail).deptNo)" class="dept-tag">{{ deptNameOf((u as UserDetail).deptNo) }}</span>
         <span v-if="u.isDeleted" class="withdrawn-tag">탈퇴</span>
@@ -419,17 +420,6 @@ const closeDetailModal = () => {
 }
 .user-item:hover {
   background: #e9f2ff;
-}
-.avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: #007bff;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: bold;
 }
 .name {
   flex: 1;

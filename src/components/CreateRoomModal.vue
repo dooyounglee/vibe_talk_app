@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { truncateRoomTitle } from "../types/chat";
 import type { ChatUser } from "../types/chat";
 import UserSearchInput from "./UserSearchInput.vue";
+import ProfileAvatar from "./ProfileAvatar.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -133,7 +134,7 @@ const confirm = () => {
         </p>
         <div v-else class="chip-list">
           <span v-for="no in memberList" :key="no" class="chip">
-            <span class="chip-avatar">{{ (props.users.find((u) => u.user_no === no)?.nickname ?? "").slice(0, 1) }}</span>
+            <ProfileAvatar :image="props.users.find((u) => u.user_no === no)?.profileImage" :size="18" />
             <span class="chip-name" :title="props.users.find((u) => u.user_no === no)?.nickname ?? ''">{{ props.users.find((u) => u.user_no === no)?.nickname ?? no }}</span>
             <button
               class="chip-x"
@@ -167,7 +168,7 @@ const confirm = () => {
               :checked="selected.has(user.user_no)"
               @change="toggle(user.user_no)"
             />
-            <span class="avatar">{{ user.nickname.slice(0, 1) }}</span>
+            <ProfileAvatar :image="user.profileImage" :size="28" />
             <span class="name">{{ user.nickname }}</span>
           </label>
         </li>
@@ -280,19 +281,6 @@ const confirm = () => {
   border-radius: 999px;
   font-size: 13px;
 }
-.chip-avatar {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #007bff;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: bold;
-  flex-shrink: 0;
-}
 .chip-name {
   max-width: 120px;
   overflow: hidden;
@@ -331,18 +319,6 @@ const confirm = () => {
   font-size: 14px;
 }
 .select-item label:hover { background: #f2f7ff; }
-.avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: #007bff;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: bold;
-  font-size: 13px;
-}
 .name { flex: 1; word-break: break-all; }
 .error { color: #d33; font-size: 13px; }
 .modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
