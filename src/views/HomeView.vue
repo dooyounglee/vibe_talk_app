@@ -13,6 +13,9 @@ import RoomListView from "../components/RoomListView.vue";
 import CreateRoomModal from "../components/CreateRoomModal.vue";
 import RenameRoomModal from "../components/RenameRoomModal.vue";
 import CloseConfirmModal from "../components/CloseConfirmModal.vue";
+import ProfileAvatar from "../components/ProfileAvatar.vue";
+import ProfileImageModal from "../components/ProfileImageModal.vue";
+import { openImageWindow } from "../utils/imageWindow";
 import { useChatSocket } from "../composables/useChatSocket";
 import {
   createChatBus,
@@ -82,6 +85,9 @@ const {
   sendRoom,
   upsertUser,
   renameUser,
+  myProfileImage,
+  profileImageResult,
+  setProfileImage,
 } = useChatSocket();
 
 const router = useRouter();
@@ -765,6 +771,29 @@ const confirmMyRenameModal = () => {
   showMyRenameModal.value = false;
 };
 
+// ─── 프로필 이미지 (헤더 닉네임 앞 동그라미) ───
+// 동그라미 클릭 → 이미지 창(#/image/:fileId)에서 크게 보기. 기본 이미지(미등록)는 열 것이 없다.
+const openMyProfileImage = async () => {
+  const img = myProfileImage.value;
+  if (!img) return;
+  clearWindowError();
+  const ok = await openImageWindow(img);
+  if (!ok) showWindowError("이미지 창을 열지 못했습니다. 팝업 차단을 확인해주세요.");
+};
+
+// 헤더 ⋮ 메뉴 → '프로필이미지 설정' 모달
+const showProfileImageModal = ref(false);
+const openProfileImageModal = () => {
+  closeHeaderMenu();
+  showProfileImageModal.value = true;
+};
+const closeProfileImageModal = () => {
+  showProfileImageModal.value = false;
+};
+const handleApplyProfileImage = (fileId: string | null, done: (sent: boolean) => void) => {
+  done(setProfileImage(fileId));
+};
+
 // 내가 만든 방이 목록에 반영되면 자동으로 새 창을 연다
 // (방 만들기 팝업에서 확인을 누른 직후 1회만 동작)
 watch(
@@ -809,9 +838,16 @@ const visibleRooms = computed<RoomInfo[]>(() =>
   <!-- 2번 화면: 내 채팅방 + 사용자 목록 (채팅은 별도 윈도우 창으로 열림) -->
   <div v-else class="main-screen">
     <div class="main-header">
-      <div>
-        <div class="me">내 닉네임: <strong>{{ nickname }}</strong></div>
-        <div class="status">{{ connectionStatus }}</div>
+      <div class="me">
+        <button
+          class="avatar-btn"
+          :class="{ clickable: !!myProfileImage }"
+          :title="myProfileImage ? '프로필 이미지 크게 보기' : '프로필 이미지 없음'"
+          @click="openMyProfileImage"
+        >
+          <ProfileAvatar :image="myProfileImage" :size="36" />
+        </button>
+        <strong class="me-name">{{ nickname }}</strong>
       </div>
       <div class="header-buttons">
         <!-- 내 상태: 닉네임 오른쪽(=나가기 버튼 왼쪽) 드롭다운.
@@ -842,6 +878,7 @@ const visibleRooms = computed<RoomInfo[]>(() =>
           <div v-if="showHeaderMenu" class="header-menu-backdrop" @click="closeHeaderMenu"></div>
           <div v-if="showHeaderMenu" class="header-menu" @click.stop>
             <button :disabled="!isConnected" @click="openMyRenameModal">내 닉네임 변경</button>
+            <button :disabled="!isConnected" @click="openProfileImageModal">프로필이미지 설정</button>
             <button v-if="isConnected" @click="handleMenuLeave">나가기</button>
           </div>
         </div>
@@ -917,6 +954,15 @@ const visibleRooms = computed<RoomInfo[]>(() =>
         </div>
       </div>
     </div>
+    <!-- 프로필이미지 설정 모달 (헤더 ⋮ 메뉴 → '프로필이미지 설정') -->
+    <ProfileImageModal
+      v-if="showProfileImageModal"
+      :current-image="myProfileImage"
+      :is-connected="isConnected"
+      :result="profileImageResult"
+      @apply="handleApplyProfileImage"
+      @cancel="closeProfileImageModal"
+    />
     <p v-if="userRenameResult && mainTab !== 'users'" class="rename-result">{{ userRenameResult }}</p>
     <!-- 방 만들기 팝업: 사용자 1명 이상 체크 후 확인 (방 이름은 자동 생성) -->
     <CreateRoomModal
@@ -986,8 +1032,18 @@ const visibleRooms = computed<RoomInfo[]>(() =>
   border-radius: 10px;
   padding: 12px 16px;
 }
-.me { font-size: 15px; }
-.status { font-size: 12px; color: #666; margin-top: 4px; }
+.me { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 15px; }
+.me-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 50%;
+  line-height: 0;
+  cursor: default;
+}
+.avatar-btn.clickable { cursor: zoom-in; }
+.avatar-btn.clickable:hover { box-shadow: 0 0 0 2px #b3d4ff; }
 .header-buttons { display: flex; gap: 8px; align-items: center; }
 /* 내 상태 드롭다운: 라벨 + 상태별 색(select는 상태값을 class로 받아 색을 바꾼다) */
 .status-select-wrap { display: flex; align-items: center; gap: 6px; }

@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import type { ChatMessage, ChatUser, Department, MyStatus, RoomInfo, RoomSearchState } from "../types/chat";
+import type { ChatAttachment, ChatMessage, ChatUser, Department, MyStatus, RoomInfo, RoomSearchState } from "../types/chat";
 import {
   DEFAULT_MY_STATUS,
   MY_STATUS_EMOJI,
@@ -19,6 +19,8 @@ const loginId = ref("");
 // 내 user_no (서버 내부 키) + 표시용 닉네임
 const myUserNo = ref<number | null>(null);
 const nickname = ref("");
+// 내 프로필 이미지 (null = 기본 실루엣). join_ok / my_profile 로 받는다.
+const myProfileImage = ref<ChatAttachment | null>(null);
 
 // ─── 내 상태 (접속/오프라인/회의중/바쁨/자리비움) ───
 // 메인 화면 상단 드롭다운에서 고른 값.
@@ -95,6 +97,8 @@ const joinError = ref("");
 const userUpsertResult = ref("");
 // user_rename 결과 메시지
 const userRenameResult = ref("");
+// profile_image_set 결과 — seq로 매 응답을 구분해 모달이 성공/실패를 감지한다
+const profileImageResult = ref<{ seq: number; ok: boolean; text: string } | null>(null);
 const isAdmin = () => myUserNo.value === 1;
 
 // 방제목 수정 실패 사유 (RenameRoomModal에 표시). 성공하면 서버가 새 목록을 주므로 비운다.
@@ -420,6 +424,7 @@ const handleIncoming = (raw: string) => {
       if (typeof (data.loginId ?? data.login_id) === "string" && (data.loginId ?? data.login_id)) {
         loginId.value = String(data.loginId ?? data.login_id);
       }
+      if ("profileImage" in data) myProfileImage.value = toChatAttachment(data.profileImage) ?? null;
       joinError.value = "";
     }
   } else if (data.type === "join_failed") {
@@ -445,6 +450,12 @@ const handleIncoming = (raw: string) => {
     } else {
       userRenameResult.value = String(data.text || "닉네임 변경에 실패했습니다");
     }
+  } else if (data.type === "profile_image_result") {
+    profileImageResult.value = {
+      seq: (profileImageResult.value?.seq ?? 0) + 1,
+      ok: data.ok === true,
+      text: data.ok ? "" : String(data.text || "프로필 이미지 변경에 실패했습니다"),
+    };
   } else if (data.type === "system") {
     // 방 스코프 system 알림은 해당 방 박스에, 전역 알림은 무시(표시 위치 없음)
     const roomId = Number(data.roomId);
@@ -1143,6 +1154,14 @@ const renameUser = (targetNo: number, newNickname: string): boolean => {
   return true;
 };
 
+// ─── 프로필 이미지 변경/초기화 (본인) ───
+// fileId = uploadAttachment 로 올린 이미지 키, null = 기본 이미지로 초기화
+const setProfileImage = (fileId: string | null): boolean => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify({ type: "profile_image_set", fileId }));
+  return true;
+};
+
 // 수동 재연결 함수
 const manualReconnect = () => {
   if (reconnectTimer.value) {
@@ -1253,5 +1272,8 @@ export function useChatSocket() {
     clearRoomSearch,
     upsertUser,
     renameUser,
+    myProfileImage,
+    profileImageResult,
+    setProfileImage,
   };
 }
