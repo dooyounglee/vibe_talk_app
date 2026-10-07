@@ -19,6 +19,7 @@ import PasswordResetModal from "../components/PasswordResetModal.vue";
 import UserDetailModal, { type UserDetailInfo } from "../components/UserDetailModal.vue";
 import { openImageWindow } from "../utils/imageWindow";
 import { TOAST_OPEN_ROOM_EVENT, ensureToastWindow, showMessageToast } from "../utils/toastWindow";
+import { flashTaskbarForRoom, stopTaskbarFlash } from "../utils/taskbarFlash";
 import { useChatSocket } from "../composables/useChatSocket";
 import {
   createChatBus,
@@ -415,6 +416,8 @@ const handleIncomingRoomMessage = (msg: ChatMessage) => {
     sender: msg.nickname,
     text: msg.file ? attachmentPreviewText(msg.file) : msg.text,
   });
+  // 작업표시줄 주황색 깜빡임 (그 방 채팅창이 떠 있으면 그 창, 없으면 메인 창)
+  void flashTaskbarForRoom(roomId);
 };
 
 // 로그인되면 알림 카드 창을 미리 만들어 둔다 (첫 알림이 늦게 뜨지 않도록)
@@ -461,6 +464,8 @@ onMounted(() => {
         break;
       case "room-focus":
         setRoomFocus(msg.roomId, msg.focused);
+        // 채팅방 창에서 확인했으면 그 메시지 때문에 깜빡이던 메인 창도 끈다
+        if (msg.focused) void stopTaskbarFlash("main");
         break;
       case "room-rename":
         // 채팅방 창(팝업)에서 연필로 요청한 제목 수정.

@@ -10,6 +10,34 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+/// 작업표시줄 주황색 깜빡임(남은 주황색 표시 포함)을 즉시 끈다.
+/// JS의 requestUserAttention(null)은 이미 활성화된 창이면 아무것도 하지 않으므로
+/// "창을 확인하는 순간 끄기"를 위해 FlashWindowEx(FLASHW_STOP)를 직접 부른다.
+/// 동기 명령이라 메인(UI) 스레드에서 실행된다.
+#[tauri::command]
+fn stop_taskbar_flash(app: AppHandle, label: String) {
+    #[cfg(windows)]
+    if let Some(win) = app.get_webview_window(&label) {
+        if let Ok(hwnd) = win.hwnd() {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                FlashWindowEx, FLASHWINFO, FLASHW_STOP,
+            };
+            let info = FLASHWINFO {
+                cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
+                hwnd: hwnd.0 as _,
+                dwFlags: FLASHW_STOP,
+                uCount: 0,
+                dwTimeout: 0,
+            };
+            unsafe {
+                FlashWindowEx(&info);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (app, label);
+}
+
 /// 트레이에 숨겨 둔 메인 창을 다시 띄운다.
 fn show_main_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
@@ -63,7 +91,7 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![greet, stop_taskbar_flash])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
